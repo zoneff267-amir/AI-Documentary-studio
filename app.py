@@ -1,5 +1,7 @@
 
 import streamlit as st
+import re
+import math
 
 st.set_page_config(
     page_title="AI Documentary Studio",
@@ -31,11 +33,50 @@ quality = st.selectbox(
 )
 
 if st.button("Generate Video"):
-    if script.strip():
-        st.success("Script successfully received!")
-        st.write("Images:", images)
-        st.write("Voice:", voice)
-        st.write("Quality:", quality)
-    else:
+    if not script.strip():
         st.warning("पहले Script डालें!")
-      
+    else:
+        sentences = re.split(r'(?<=[।!?])\s+', script.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        if not sentences:
+            st.warning("स्क्रिप्ट में टेक्स्ट नहीं मिला।")
+        else:
+            total = len(sentences)
+            per_scene = math.ceil(total / images)
+
+            st.success("Scene Planning Complete!")
+
+            st.write("Total Images:", images)
+            st.write("Voice:", voice)
+            st.write("Quality:", quality)
+
+            st.subheader("🎞️ Scene-by-Scene Image Prompts")
+
+            for i in range(images):
+                start = i * per_scene
+                end = min(start + per_scene, total)
+                scene_text = " ".join(sentences[start:end])
+
+                if not scene_text:
+                    scene_text = sentences[-1]
+
+                prompt = (
+                    "Cinematic 2D illustrated documentary scene, "
+                    "Indian setting, realistic lighting, 16:9 widescreen. "
+                    "Main character: a 30-year-old Indian man, "
+                    "heavier build, wearing a sky-blue shirt "
+                    "and black formal pants. "
+                    "Keep character design consistent. "
+                    "No text, no watermark. Scene: " + scene_text
+                )
+
+                with st.expander("Scene " + str(i + 1)):
+                    st.write("Script:", scene_text)
+                    st.code(prompt, language="text")
+
+            st.info(
+                "Scene prompts तैयार हैं। इन्हें Gemini में "
+                "इमेज बनाने के लिए इस्तेमाल कर सकते हैं।"
+            )
+            
