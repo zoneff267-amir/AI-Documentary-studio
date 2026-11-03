@@ -1,6 +1,11 @@
+
 import streamlit as st
 import re
 import math
+import asyncio
+import edge_tts
+import tempfile
+import os
 
 st.set_page_config(
     page_title="AI Documentary Studio",
@@ -11,12 +16,10 @@ st.set_page_config(
 st.title("🎬 AI Documentary Studio")
 st.subheader("Your Personal AI Video Creator")
 
-st.write("अपनी हिंदी वीडियो स्क्रिप्ट यहाँ डालें")
-
 script = st.text_area(
-    "Video Script",
+    "अपनी हिंदी वीडियो स्क्रिप्ट यहाँ डालें",
     height=250,
-    placeholder="यहाँ अपनी पूरी हिंदी स्क्रिप्ट पेस्ट करें..."
+    placeholder="यहाँ पूरी हिंदी स्क्रिप्ट पेस्ट करें..."
 )
 
 images = st.selectbox(
@@ -34,71 +37,101 @@ quality = st.selectbox(
     ["1080p", "720p"]
 )
 
-if st.button("Generate Video"):
-
+if st.button("Generate Image Prompts"):
     if not script.strip():
-        st.warning("पहले Script डालें!")
-
+        st.warning("पहले स्क्रिप्ट डालें!")
     else:
         sentences = re.split(r'(?<=[।!?])\s+', script.strip())
         sentences = [s.strip() for s in sentences if s.strip()]
 
-        if not sentences:
-            st.warning("स्क्रिप्ट में टेक्स्ट नहीं मिला!")
+        total = len(sentences)
+        per_scene = math.ceil(total / images)
+        all_prompts = []
 
-        else:
-            total = len(sentences)
-            per_scene = math.ceil(total / images)
+        st.success("Scene Planning Complete!")
+        st.write("Total Images:", images)
 
-            all_prompts = []
+        for i in range(images):
+            start = i * per_scene
+            end = min(start + per_scene, total)
+            scene_text = " ".join(sentences[start:end])
 
-            st.success("Scene Planning Complete!")
+            if not scene_text:
+                scene_text = sentences[-1]
 
-            st.write("Total Images:", images)
-            st.write("Voice:", voice)
-            st.write("Quality:", quality)
+            prompt = (
+                "Cinematic 2D illustrated documentary scene, "
+                "Indian setting, realistic lighting, 16:9 widescreen. "
+                "Main character: a 30-year-old Indian man, "
+                "heavier build, wearing a sky-blue shirt "
+                "and black formal pants. "
+                "Keep character design consistent. "
+                "No text, no watermark. Scene: " + scene_text
+            )
 
-            st.subheader("🎞️ Scene-by-Scene Image Prompts")
+            all_prompts.append(prompt)
 
-            for i in range(images):
+            with st.expander("Scene " + str(i + 1)):
+                st.write(scene_text)
+                st.code(prompt)
 
-                start = i * per_scene
-                end = min(start + per_scene, total)
+        prompts_text = "\n\n".join(
+            f"SCENE {i+1}\n{p}"
+            for i, p in enumerate(all_prompts)
+        )
 
-                scene_text = " ".join(sentences[start:end])
+        st.download_button(
+            "📥 Download All Image Prompts",
+            prompts_text,
+            file_name="all_image_prompts.txt"
+        )
 
-                if not scene_text:
-                    scene_text = sentences[-1]
+st.divider()
+st.header("🎙️ Hindi AI Voice Generator")
 
-                prompt = (
-                    "Cinematic 2D illustrated documentary scene, "
-                    "Indian setting, realistic lighting, 16:9 widescreen. "
-                    "Main character: a 30-year-old Indian man, "
-                    "heavier build, wearing a sky-blue shirt "
-                    "and black formal pants. "
-                    "Keep character design consistent. "
-                    "No text, no watermark. Scene: " + scene_text
+if st.button("Generate Hindi Voice"):
+    if not script.strip():
+        st.warning("पहले अपनी स्क्रिप्ट डालें!")
+    else:
+        try:
+            with st.spinner("आपकी हिंदी आवाज़ तैयार हो रही है..."):
+                selected_voice = (
+                    "hi-IN-MadhurNeural"
+                    if voice == "Hindi Male"
+                    else "hi-IN-SwaraNeural"
                 )
 
-                all_prompts.append(prompt)
+                async def create_voice(path):
+                    communicate = edge_tts.Communicate(
+                        script,
+                        selected_voice
+                    )
+                    await communicate.save(path)
 
-                with st.expander("Scene " + str(i + 1)):
-                    st.write("Script:", scene_text)
-                    st.code(prompt, language="text")
+                with tempfile.NamedTemporaryFile(
+                    suffix=".mp3",
+                    delete=False
+                ) as audio_file:
+                    audio_path = audio_file.name
 
-            st.info(
-                "सभी Scene के Image Prompts तैयार हैं। "
-                "इन्हें Gemini में इमेज बनाने के लिए इस्तेमाल करें।"
-            )
+                asyncio.run(create_voice(audio_path))
 
-            prompts_text = "\n\n".join(
-                f"SCENE {idx + 1}\n{prompt}"
-                for idx, prompt in enumerate(all_prompts)
-            )
+                with open(audio_path, "rb") as f:
+                    audio_bytes = f.read()
 
-            st.download_button(
-                label="📥 Download All Image Prompts",
-                data=prompts_text,
-                file_name="all_image_prompts.txt",
-                mime="text/plain"
-            )
+                os.remove(audio_path)
+
+                st.success("आपकी AI Voice तैयार है!")
+                st.audio(audio_bytes, format="audio/mp3")
+
+                st.download_button(
+                    "📥 Download Hindi Voice MP3",
+                    audio_bytes,
+                    file_name="hindi_voice.mp3",
+                    mime="audio/mpeg"
+                )
+
+        except Exception as e:
+            st.error("Voice बनाने में समस्या आई। इंटरनेट जाँचें और दोबारा कोशिश करें।")
+            st.caption(str(e))
+            
