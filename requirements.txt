@@ -4,3 +4,4 @@ moviepy
 Pillow
 pydub
 audioop-lts
+numpy
