@@ -184,3 +184,146 @@ if st.button("Generate Enhanced Hindi Voice"):
         except Exception as e:
             st.error("Voice बनाने में समस्या आई।")
             st.caption(str(e))
+st.divider()
+st.header("🎬 Automatic Video Editor")
+
+st.write("अपनी Images और तैयार Hindi AI Voice से वीडियो बनाएँ।")
+
+if uploaded_images:
+    st.write(f"Uploaded Images: {len(uploaded_images)}")
+else:
+    st.info("पहले अपनी Documentary Images अपलोड करें।")
+
+if "voice_audio_bytes" in st.session_state:
+    st.success("Hindi AI Voice तैयार है।")
+else:
+    st.warning("पहले Generate Enhanced Hindi Voice बटन से Voice बनाएँ।")
+if st.button("🎬 Create Documentary Video"):
+    if not uploaded_images:
+        st.error("पहले Images अपलोड करें।")
+
+    elif "voice_audio_bytes" not in st.session_state:
+        st.error("पहले Hindi AI Voice तैयार करें।")
+
+    elif len(uploaded_images) < 2:
+        st.error("कम से कम 2 Images अपलोड करें।")
+
+    else:
+            try:
+                with st.spinner("आपका Documentary Video बन रहा है..."):
+                    with tempfile.TemporaryDirectory() as temp_dir:
+
+                        audio_bytes = st.session_state["voice_audio_bytes"]
+                        audio_path = os.path.join(temp_dir, "voice.mp3")
+
+                        with open(audio_path, "wb") as f:
+                            f.write(audio_bytes)
+
+                        audio_duration = AudioSegment.from_file(
+                            io.BytesIO(audio_bytes)
+                        ).duration_seconds
+
+                        sorted_images = sorted(
+                            uploaded_images,
+                            key=lambda f: [
+                                int(x) if x.isdigit() else x.lower()
+                                for x in re.split(r"(\d+)", f.name)
+                            ]
+                        )
+
+                        image_paths = []
+
+                        for i, img in enumerate(sorted_images):
+                            ext = os.path.splitext(img.name)[1].lower()
+                            path = os.path.join(
+                                temp_dir, f"scene_{i:04d}{ext}"
+                            )
+                            with open(path, "wb") as f:
+                                f.write(img.getvalue())
+                            image_paths.append(path)
+
+                        width, height = (
+                            (1920, 1080) if quality == "1080p"
+                            else (1280, 720)
+                        )
+
+                        fps = 24
+                        scene_duration = audio_duration / len(image_paths)
+                        frames = max(1, round(scene_duration * fps))
+
+                        command = ["ffmpeg", "-y"]
+
+                        for path in image_paths:
+                            command += [
+                                "-loop", "1",
+                                "-framerate", str(fps),
+                                "-t", str(scene_duration),
+                                "-i", path
+                            ]
+
+                        filters = []
+
+                        for i in range(len(image_paths)):
+                            filters.append(
+                                f"[{i}:v]"
+                                f"scale={width}:{height}:"
+                                f"force_original_aspect_ratio=increase,"
+                                f"crop={width}:{height},"
+                                f"zoompan=z='min(zoom+0.0005,1.08)':"
+                                f"d=1:s={width}x{height}:fps={fps},"
+                                f"setsar=1,format=yuv420p[v{i}]"
+                            )
+
+                        inputs = "".join(
+                            f"[v{i}]" for i in range(len(image_paths))
+                        )
+
+                        filters.append(
+                            f"{inputs}concat=n={len(image_paths)}:v=1:a=0[vout]"
+                        )
+
+                        command += [
+                            "-i", audio_path,
+                            "-filter_complex", ";".join(filters),
+                            "-map", "[vout]",
+                            "-map", f"{len(image_paths)}:a",
+                            "-c:v", "libx264",
+                            "-preset", "ultrafast",
+                            "-pix_fmt", "yuv420p",
+                            "-c:a", "aac",
+                            "-b:a", "192k",
+                            "-shortest",
+                            "-movflags", "+faststart",
+                            os.path.join(temp_dir, "documentary.mp4")
+                        ]
+
+                        result = subprocess.run(
+                            command,
+                            capture_output=True,
+                            text=True,
+                            timeout=900
+                        )
+
+                        if result.returncode != 0:
+                            raise Exception(result.stderr[-2000:])
+
+                        video_path = os.path.join(
+                            temp_dir, "documentary.mp4"
+                        )
+
+                        with open(video_path, "rb") as f:
+                            video_bytes = f.read()
+
+                st.success("आपका Documentary Video तैयार है!")
+                st.video(video_bytes)
+
+                st.download_button(
+                    "📥 Download  Documentary MP4",
+                    video_bytes,
+                    file_name="my_documentary.mp4",
+                    mime="video/mp4"
+                )
+
+            except Exception as e:
+                st.error("वीडियो बनाने में समस्या आई।")
+                st.caption(str(e))
