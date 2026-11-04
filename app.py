@@ -307,22 +307,22 @@ if st.button("🎬 Create Documentary Video"):
                             os.path.join(temp_dir, "documentary.mp4")
                            ]
 
-               result = subprocess.run(
+                result = subprocess.run(
                             command,
                             capture_output=True,
                             text=True,
                             timeout=900
                         )
 
-                        if result.returncode != 0:
-                            raise Exception(result.stderr[-2000:])
+                if result.returncode != 0:
+                        raise Exception(result.stderr[-2000:])
 
-                        video_path = os.path.join(
+                video_path = os.path.join(
                             temp_dir, "documentary.mp4"
                         )
 
-                        with open(video_path, "rb") as f:
-                            video_bytes = f.read()
+                with open(video_path, "rb") as f:
+                        video_bytes = f.read()
 
                 st.success("आपका Documentary Video तैयार है!")
                 st.video(video_bytes)
