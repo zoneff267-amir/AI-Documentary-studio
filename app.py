@@ -253,34 +253,39 @@ if st.button("🎬 Create Documentary Video"):
 
                         command = ["ffmpeg", "-y"]
 
-                        for path in image_paths:
-                            command += [
-                                "-loop", "1",
-                                "-framerate", str(fps),
-                                "-t", str(scene_duration),
-                                "-i", path
-                            ]
+                        
 
+                        transition = 0.5
                         filters = []
 
                         for i in range(len(image_paths)):
                             filters.append(
-                                f"[{i}:v]"
-                                f"scale={width}:{height}:"
-                                f"force_original_aspect_ratio=increase,"
-                                f"crop={width}:{height},"
-                                f"zoompan=z='min(zoom+0.0005,1.08)':"
-                                f"d=1:s={width}x{height}:fps={fps},"
-                                f"setsar=1,format=yuv420p[v{i}]"
-                            )
+                f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},"
+                f"zoompan=z='min(zoom+0.0005,1.08)':"
+                f"x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)':"
+                f"d=1:s={width}x{height}:fps={fps},"
+                f"setsar=1,format=yuv420p,settb=AVTB,"
+                f"setpts=PTS-STARTPTS[v{i}]"
+            )
 
-                        inputs = "".join(
-                            f"[v{i}]" for i in range(len(image_paths))
-                        )
+        previous = "[v0]"
 
-                        filters.append(
-                            f"{inputs}concat=n={len(image_paths)}:v=1:a=0[vout]"
-                        )
+        for i in range(1, len(image_paths)):
+            output = f"[xf{i}]"
+            offset = scene_duration * i - transition * i
+
+            filters.append(
+                f"{previous}[v{i}]"
+                f"xfade=transition=fade:"
+                f"duration={transition}:"
+                f"offset={offset:.3f}{output}"
+            )
+
+            previous = output
+
+        filters.append(f"{previous}format=yuv420p[vout]")
 
                         command += [
                             "-i", audio_path,
