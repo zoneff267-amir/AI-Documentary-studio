@@ -6,7 +6,8 @@ import asyncio
 import edge_tts
 import tempfile
 import os
-
+import io
+from pydub import AudioSegment, effects
 st.set_page_config(
     page_title="AI Documentary Studio",
     page_icon="🎬",
@@ -89,49 +90,89 @@ if st.button("Generate Image Prompts"):
 st.divider()
 st.header("🎙️ Hindi AI Voice Generator")
 
-if st.button("Generate Hindi Voice"):
+if st.button("Generate Enhanced Hindi Voice"):
     if not script.strip():
-        st.warning("पहले अपनी स्क्रिप्ट डालें!")
+        st.warning("पहले अपनी स्क्रिप्ट डालें।")
     else:
         try:
-            with st.spinner("आपकी हिंदी आवाज़ तैयार हो रही है..."):
-                selected_voice = (
-                    "hi-IN-MadhurNeural"
-                    if voice == "Hindi Male"
-                    else "hi-IN-SwaraNeural"
-                )
+            selected_voice = (
+                "hi-IN-MadhurNeural"
+                if voice == "Hindi Male"
+                else "hi-IN-SwaraNeural"
+            )
 
-                async def create_voice(path):
-                    communicate = edge_tts.Communicate(
-                        script,
-                        selected_voice
+            # Script ko chhote sentences mein baantna
+            sentences = re.split(r'(?<=[।.!?])\s+|\n+', script.strip())
+
+            chunks = []
+            current_chunk = ""
+
+            for sentence in sentences:
+                if len(current_chunk) + len(sentence) < 1800:
+                    current_chunk += sentence + " "
+                else:
+                    if current_chunk.strip():
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence + " "
+
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+
+            with st.spinner("आपकी Smooth AI Voice तैयार हो रही है..."):
+                with tempfile.TemporaryDirectory() as temp_dir:
+
+                    async def create_chunks():
+                        for i, chunk in enumerate(chunks):
+                            path = os.path.join(
+                                temp_dir, f"part_{i}.mp3"
+                            )
+                            communicate = edge_tts.Communicate(
+                                chunk, selected_voice
+                            )
+                            await communicate.save(path)
+
+                    asyncio.run(create_chunks())
+
+                    final_audio = AudioSegment.empty()
+
+                    for i in range(len(chunks)):
+                        path = os.path.join(
+                            temp_dir, f"part_{i}.mp3"
+                        )
+                        audio_part = AudioSegment.from_mp3(path)
+                        final_audio += audio_part
+                        final_audio += AudioSegment.silent(
+                            duration=120
+                        )
+
+                    # Volume ko balanced karna
+                    final_audio = effects.normalize(
+                        final_audio, headroom=1.0
                     )
-                    await communicate.save(path)
 
-                with tempfile.NamedTemporaryFile(
-                    suffix=".mp3",
-                    delete=False
-                ) as audio_file:
-                    audio_path = audio_file.name
+                    output_path = os.path.join(
+                        temp_dir, "enhanced_voice.mp3"
+                    )
 
-                asyncio.run(create_voice(audio_path))
+                    final_audio.export(
+                        output_path,
+                        format="mp3",
+                        bitrate="192k"
+                    )
 
-                with open(audio_path, "rb") as f:
-                    audio_bytes = f.read()
+                    with open(output_path, "rb") as f:
+                        audio_bytes = f.read()
 
-                os.remove(audio_path)
+            st.success("आपकी Enhanced Hindi Voice तैयार है!")
+            st.audio(audio_bytes, format="audio/mp3")
 
-                st.success("आपकी AI Voice तैयार है!")
-                st.audio(audio_bytes, format="audio/mp3")
-
-                st.download_button(
-                    "📥 Download Hindi Voice MP3",
-                    audio_bytes,
-                    file_name="hindi_voice.mp3",
-                    mime="audio/mpeg"
-                )
+            st.download_button(
+                "📥 Download Enhanced Voice MP3",
+                audio_bytes,
+                file_name="enhanced_hindi_voice.mp3",
+                mime="audio/mpeg"
+            )
 
         except Exception as e:
-            st.error("Voice बनाने में समस्या आई। इंटरनेट जाँचें और दोबारा कोशिश करें।")
+            st.error("Voice बनाने में समस्या आई।")
             st.caption(str(e))
-            
