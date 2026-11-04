@@ -1,15 +1,17 @@
-
 import streamlit as st
-import re
 import os
-import io
-import math
+import re
 import asyncio
 import tempfile
-import subprocess
+import numpy as np
+from PIL import Image
 import edge_tts
 
-from pydub import AudioSegment, effects
+try:
+    from moviepy import VideoClip, AudioFileClip, concatenate_videoclips
+except ImportError:
+    from moviepy.editor import VideoClip, AudioFileClip, concatenate_videoclips
+
 
 st.set_page_config(
     page_title="AI Documentary Studio",
@@ -18,368 +20,508 @@ st.set_page_config(
 )
 
 st.title("🎬 AI Documentary Studio")
-st.write("अपनी Script, Images और Hindi AI Voice से Documentary Video बनाएँ।")
+st.caption("Hindi AI Voice + Cinematic Documentary Video")
 
-# Session state
+
+# ---------------- SESSION STATE ----------------
+
 if "voice_audio_bytes" not in st.session_state:
     st.session_state.voice_audio_bytes = None
 
 if "all_prompts" not in st.session_state:
     st.session_state.all_prompts = []
 
-# Script
-st.header("📝 Documentary Script")
+
+# ---------------- HELPER FUNCTIONS ----------------
+
+def split_script(script):
+    sentences = re.split(r'(?<=[।.!?])\s+', script.strip())
+    return [s.strip() for s in sentences if s.strip()]
+
+
+def generate_prompts(script, count):
+    sentences = split_script(script)
+
+    if not sentences:
+        return []
+
+    prompts = []
+
+    for i in range(count):
+        index = min(
+            int(i * len(sentences) / count),
+            len(sentences) - 1
+        )
+
+        scene_text = sentences[index]
+
+        prompt = f"""
+Create a cinematic 2D illustrated documentary scene.
+
+Scene idea: {scene_text}
+
+Visual style:
+Professional 2D hand-drawn cinematic illustration,
+Indian environment, realistic proportions,
+dramatic documentary lighting, detailed background,
+rich visual storytelling, professional composition.
+
+Main character:
+A consistent 30-year-old Indian gentleman,
+slightly heavy build, wearing a sky-blue shirt
+and black formal pants.
+
+Keep the same character appearance in every scene
+whenever the character is visible.
+
+Landscape 16:9 widescreen composition.
+No text, no subtitles, no watermark,
+no 3D render, no anime.
+"""
+        prompts.append(prompt.strip())
+
+    return prompts
+
+
+async def create_voice(text, voice, output_file):
+    communicator = edge_tts.Communicate(
+        text=text,
+        voice=voice,
+        rate="+0%",
+        volume="+0%"
+    )
+    await communicator.save(output_file)
+
+
+def natural_sort_key(name):
+    return [
+        int(part) if part.isdigit() else part.lower()
+        for part in re.split(r'(\d+)', name)
+    ]
+
+
+# ---------------- CENTER ZOOM EFFECT ----------------
+
+def create_zoom_frame(image, width, height, duration, fps):
+
+    image = image.convert("RGB")
+
+    img_w, img_h = image.size
+
+    # Image ko screen ke size ke hisaab se fit karein
+    cover_scale = max(width / img_w, height / img_h)
+
+    base_w = int(img_w * cover_scale)
+    base_h = int(img_h * cover_scale)
+
+    base_image = image.resize(
+        (base_w, base_h),
+        Image.Resampling.LANCZOS
+    )
+
+    def make_frame(t):
+
+        # 0 se 1 tak smooth progress
+        progress = min(max(t / max(duration, 0.01), 0), 1)
+
+        # Center Zoom In aur Zoom Out
+        # Shuru aur end mein normal size
+        # Beech mein maximum zoom
+        zoom = 1.0 + 0.07 * (
+            0.5 - 0.5 * np.cos(2 * np.pi * progress)
+        )
+
+        new_w = int(base_w * zoom)
+        new_h = int(base_h * zoom)
+
+        resized = base_image.resize(
+            (new_w, new_h),
+            Image.Resampling.LANCZOS
+        )
+
+        # Hamesha center se crop hoga
+        left = (new_w - width) // 2
+        top = (new_h - height) // 2
+
+        frame = resized.crop(
+            (
+                left,
+                top,
+                left + width,
+                top + height
+            )
+        )
+
+        return np.array(frame)
+
+    return make_frame
+
+
+# ---------------- VIDEO CREATION ----------------
+
+def build_video(image_files, audio_path, output_path, resolution):
+
+    width, height = resolution
+    fps = 24
+
+    audio_clip = AudioFileClip(audio_path)
+    audio_duration = audio_clip.duration
+
+    total_images = len(image_files)
+
+    if total_images == 0:
+        raise ValueError("Please upload at least one image.")
+
+    scene_duration = audio_duration / total_images
+
+    clips = []
+
+    for image_file in image_files:
+
+        image = Image.open(image_file).convert("RGB")
+
+        make_frame = create_zoom_frame(
+            image,
+            width,
+            height,
+            scene_duration,
+            fps
+        )
+
+        try:
+            clip = VideoClip(
+                frame_function=make_frame,
+                duration=scene_duration
+            )
+        except TypeError:
+            clip = VideoClip(
+                make_frame=make_frame,
+                duration=scene_duration
+            )
+
+        clips.append(clip)
+
+    final_video = concatenate_videoclips(
+        clips,
+        method="compose"
+    )
+
+    try:
+        final_video = final_video.with_audio(audio_clip)
+    except AttributeError:
+        final_video = final_video.set_audio(audio_clip)
+
+    final_video.write_videofile(
+        output_path,
+        fps=fps,
+        codec="libx264",
+        audio_codec="aac",
+        preset="ultrafast",
+        bitrate="5000k" if width == 1920 else "2500k",
+        threads=2,
+        logger=None
+    )
+
+    final_video.close()
+    audio_clip.close()
+
+    for clip in clips:
+        clip.close()
+
+
+# ---------------- SCRIPT SECTION ----------------
+
+st.header("1. Documentary Script")
+
 script = st.text_area(
-    "अपनी पूरी Hindi Script यहाँ डालें",
+    "Paste your Hindi documentary script here",
     height=220,
-    placeholder="अपनी Documentary Script यहाँ लिखें..."
+    placeholder="Yahan apni complete Hindi documentary script paste karein..."
 )
 
-# Settings
-st.header("⚙️ Video Settings")
 
-col1, col2 = st.columns(2)
+# ---------------- PROMPT GENERATOR ----------------
 
-with col1:
-    voice = st.selectbox(
-        "AI Voice चुनें",
-        ["Hindi Male", "Hindi Female"]
-    )
-
-with col2:
-    quality = st.selectbox(
-        "Video Quality",
-        ["1080p", "720p"]
-    )
+st.header("2. Image Prompt Generator")
 
 image_count = st.selectbox(
-    "कुल Images",
-    [80, 90, 100]
+    "Kitne image prompts chahiye?",
+    [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+    index=7
 )
 
-# Image prompts
-st.header("🖼️ Image Prompt Generator")
+if st.button("Generate Image Prompts", use_container_width=True):
 
-if st.button("Generate Image Prompts"):
     if not script.strip():
-        st.warning("पहले Script डालें।")
+        st.error("Please paste your script first.")
+
     else:
-        sentences = [
-            x.strip()
-            for x in re.split(r"(?<=[।.!?])\s+|\n+", script)
-            if x.strip()
-        ]
+        st.session_state.all_prompts = generate_prompts(
+            script,
+            image_count
+        )
 
-        prompts = []
+        st.success(
+            f"{len(st.session_state.all_prompts)} prompts generated!"
+        )
 
-        for i, sentence in enumerate(sentences):
-            prompt = (
-                f"Scene {i+1}: {sentence}\n\n"
-                "Create a cinematic 2D illustrated finance documentary image. "
-                "Indian setting, professional documentary composition, "
-                "dramatic realistic lighting, widescreen 16:9. "
-                "Keep the recurring character consistent: "
-                "30-year-old Indian gentleman, heavier build, "
-                "sky-blue shirt and black formal pants. "
-                "No text, no watermark."
-            )
-            prompts.append(prompt)
-
-        st.session_state.all_prompts = prompts
-        st.success(f"{len(prompts)} Image Prompts तैयार हैं।")
 
 if st.session_state.all_prompts:
-    prompt_text = "\n\n".join(st.session_state.all_prompts)
 
-    st.download_button(
-        "📥 Download All Image Prompts",
-        prompt_text,
-        file_name="all_image_prompts.txt",
-        mime="text/plain"
-    )
+    st.subheader("Generated Prompts")
 
-    with st.expander("Image Prompts देखें"):
-        for i, prompt in enumerate(st.session_state.all_prompts):
-            st.write(f"**Scene {i+1}**")
-            st.write(prompt)
+    for i, prompt in enumerate(
+        st.session_state.all_prompts,
+        start=1
+    ):
 
-# Voice generator
-st.divider()
-st.header("🎙️ Hindi AI Voice Generator")
+        with st.expander(f"Image Prompt {i}"):
 
-if st.button("Generate Enhanced Hindi Voice"):
-    if not script.strip():
-        st.warning("पहले Script डालें।")
-    else:
-        try:
-            selected_voice = (
-                "hi-IN-MadhurNeural"
-                if voice == "Hindi Male"
-                else "hi-IN-SwaraNeural"
+            st.text_area(
+                f"Prompt {i}",
+                prompt,
+                height=180,
+                key=f"prompt_{i}"
             )
 
-            sentences = [
-                x.strip()
-                for x in re.split(r"(?<=[।.!?])\s+|\n+", script)
-                if x.strip()
-            ]
-
-            chunks = []
-            current = ""
-
-            for sentence in sentences:
-                if len(current) + len(sentence) < 1800:
-                    current += sentence + " "
-                else:
-                    if current.strip():
-                        chunks.append(current.strip())
-                    current = sentence + " "
-
-            if current.strip():
-                chunks.append(current.strip())
-
-            with st.spinner("Hindi AI Voice तैयार हो रही है..."):
-                with tempfile.TemporaryDirectory() as temp_dir:
-
-                    async def create_chunks():
-                        for i, chunk in enumerate(chunks):
-                            path = os.path.join(
-                                temp_dir, f"part_{i}.mp3"
-                            )
-                            communicate = edge_tts.Communicate(
-                                chunk, selected_voice
-                            )
-                            await communicate.save(path)
-
-                    asyncio.run(create_chunks())
-
-                    final_audio = AudioSegment.empty()
-
-                    for i in range(len(chunks)):
-                        path = os.path.join(
-                            temp_dir, f"part_{i}.mp3"
-                        )
-                        part = AudioSegment.from_mp3(path)
-                        final_audio += part
-                        final_audio += AudioSegment.silent(
-                            duration=120
-                        )
-
-                    final_audio = effects.normalize(
-                        final_audio,
-                        headroom=1.0
-                    )
-
-                    output_path = os.path.join(
-                        temp_dir, "hindi_voice.mp3"
-                    )
-
-                    final_audio.export(
-                        output_path,
-                        format="mp3",
-                        bitrate="192k"
-                    )
-
-                    with open(output_path, "rb") as f:
-                        audio_bytes = f.read()
-
-            st.session_state.voice_audio_bytes = audio_bytes
-
-            st.success("आपकी Hindi AI Voice तैयार है!")
-            st.audio(audio_bytes, format="audio/mp3")
-
-            st.download_button(
-                "📥 Download Hindi Voice MP3",
-                audio_bytes,
-                file_name="enhanced_hindi_voice.mp3",
-                mime="audio/mpeg"
+            st.button(
+                "Copy Prompt",
+                key=f"copy_{i}",
+                on_click=lambda p=prompt: st.session_state.update(
+                    copied_prompt=p
+                )
             )
 
-        except Exception as e:
-            st.error("Voice बनाने में समस्या आई।")
-            st.code(str(e))
+    if "copied_prompt" in st.session_state:
+        st.code(st.session_state.copied_prompt)
 
-# Automatic video editor
-st.divider()
-st.header("🎬 Automatic Video Editor")
 
-st.write(
-    "अपनी Gemini से बनाई हुई Images अपलोड करें। "
-    "तैयार Hindi AI Voice अपने आप Video में जुड़ जाएगी।"
+# ---------------- VOICE SECTION ----------------
+
+st.header("3. Hindi AI Voice Generator")
+
+voice_choice = st.selectbox(
+    "Select Hindi Voice",
+    [
+        "Male Voice - Madhur",
+        "Female Voice - Swara"
+    ]
 )
 
+voice_map = {
+    "Male Voice - Madhur": "hi-IN-MadhurNeural",
+    "Female Voice - Swara": "hi-IN-SwaraNeural"
+}
+
+if st.button("Generate Hindi AI Voice", use_container_width=True):
+
+    if not script.strip():
+        st.error("Please enter your script first.")
+
+    else:
+
+        with st.spinner("Generating Hindi AI Voice..."):
+
+            try:
+
+                voice = voice_map[voice_choice]
+
+                with tempfile.TemporaryDirectory() as temp_dir:
+
+                    audio_path = os.path.join(
+                        temp_dir,
+                        "voice.mp3"
+                    )
+
+                    asyncio.run(
+                        create_voice(
+                            script,
+                            voice,
+                            audio_path
+                        )
+                    )
+
+                    with open(audio_path, "rb") as f:
+                        st.session_state.voice_audio_bytes = f.read()
+
+                st.success("Hindi AI Voice generated successfully!")
+
+            except Exception as e:
+                st.error(f"Voice generation error: {e}")
+
+
+if st.session_state.voice_audio_bytes:
+
+    st.audio(
+        st.session_state.voice_audio_bytes,
+        format="audio/mp3"
+    )
+
+    st.download_button(
+        "Download Hindi Voice MP3",
+        data=st.session_state.voice_audio_bytes,
+        file_name="hindi_documentary_voice.mp3",
+        mime="audio/mpeg"
+    )
+
+
+# ---------------- IMAGE UPLOAD ----------------
+
+st.header("4. Upload Documentary Images")
+
 uploaded_images = st.file_uploader(
-    "अपनी Documentary Images अपलोड करें",
+    "Upload your Gemini images",
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True
 )
 
 if uploaded_images:
-    st.success(f"आपने {len(uploaded_images)} Images अपलोड की हैं।")
 
-if st.session_state.voice_audio_bytes:
-    st.success("Hindi AI Voice तैयार है।")
-else:
-    st.info("पहले Hindi AI Voice तैयार करें।")
+    st.success(f"{len(uploaded_images)} images uploaded.")
 
-if st.button("🎬 Create Documentary Video"):
+    st.caption(
+        "Images ko 01, 02, 03 jaise naam dein, "
+        "taaki video mein unka order sahi rahe."
+    )
 
-    if not uploaded_images:
-        st.error("पहले Images अपलोड करें।")
+    preview_columns = st.columns(3)
 
-    elif len(uploaded_images) < 2:
-        st.error("कम से कम 2 Images अपलोड करें।")
+    for i, image_file in enumerate(uploaded_images):
 
-    elif not st.session_state.voice_audio_bytes:
-        st.error("पहले Hindi AI Voice तैयार करें।")
+        with preview_columns[i % 3]:
 
-    else:
-        try:
-            with st.spinner(
-                "आपकी Documentary Video बन रही है। कृपया प्रतीक्षा करें..."
-            ):
-
-                with tempfile.TemporaryDirectory() as temp_dir:
-
-                    # Save audio
-                    audio_path = os.path.join(
-                        temp_dir, "voice.mp3"
-                    )
-
-                    audio_bytes = st.session_state.voice_audio_bytes
-
-                    with open(audio_path, "wb") as f:
-                        f.write(audio_bytes)
-
-                    audio_duration = AudioSegment.from_file(
-                        io.BytesIO(audio_bytes),
-                        format="mp3"
-                    ).duration_seconds
-
-                    # Save uploaded images in upload order
-                    image_paths = []
-
-                    for i, img in enumerate(uploaded_images):
-                        ext = os.path.splitext(img.name)[1].lower()
-
-                        if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
-                            ext = ".png"
-
-                        path = os.path.join(
-                            temp_dir, f"scene_{i:04d}{ext}"
-                        )
-
-                        with open(path, "wb") as f:
-                            f.write(img.getvalue())
-
-                        image_paths.append(path)
-
-                    # Video settings
-                    if quality == "1080p":
-                        width, height = 1920, 1080
-                    else:
-                        width, height = 1280, 720
-
-                    fps = 24
-                    scene_duration = audio_duration / len(image_paths)
-                    frames = max(
-                        1,
-                        math.ceil(scene_duration * fps)
-                    )
-
-                    # FFmpeg command
-                    command = ["ffmpeg", "-y"]
-
-                    for path in image_paths:
-                        command += [
-                            "-loop", "1",
-                            "-framerate", str(fps),
-                            "-i", path
-                        ]
-
-                    command += ["-i", audio_path]
-
-                    filters = []
-
-                    for i in range(len(image_paths)):
-                        filters.append(
-                            f"[{i}:v]"
-                            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-                            f"crop={width}:{height},"
-                            f"zoompan=z='min(zoom+0.0005,1.08)':"
-                            f"x='iw/2-(iw/zoom/2)':"
-                            f"y='ih/2-(ih/zoom/2)':"
-                            f"d={frames}:s={width}x{height}:fps={fps},"
-                            f"setsar=1,format=yuv420p[v{i}]"
-                        )
-
-                    video_inputs = "".join(
-                        f"[v{i}]"
-                        for i in range(len(image_paths))
-                    )
-
-                    filters.append(
-                        f"{video_inputs}"
-                        f"concat=n={len(image_paths)}:v=1:a=0[outv]"
-                    )
-
-                    output_path = os.path.join(
-                        temp_dir, "documentary.mp4"
-                    )
-
-                    command += [
-                        "-filter_complex_threads", "1",
-                        "-filter_complex", ";".join(filters),
-                        "-map", "[outv]",
-                        "-map", f"{len(image_paths)}:a:0",
-                        "-c:v", "libx264",
-                        "-preset", "ultrafast",
-                        "-pix_fmt", "yuv420p",
-                        "-c:a", "aac",
-                        "-b:a", "128k",
-                        "-t", str(audio_duration),
-                        "-shortest",
-                        "-movflags", "+faststart",
-                        output_path
-                    ]
-
-                    result = subprocess.run(
-                        command,
-                        capture_output=True,
-                        text=True,
-                        timeout=900
-                    )
-
-                    if result.returncode != 0:
-                        raise Exception(result.stderr[-4000:])
-
-                    if not os.path.exists(output_path):
-                        raise Exception("Video file नहीं बनी।")
-
-                    with open(output_path, "rb") as f:
-                        video_bytes = f.read()
-
-                    st.success("आपकी Documentary Video तैयार है!")
-                    st.video(video_bytes)
-
-                    st.download_button(
-                        "📥 Download Documentary MP4",
-                        video_bytes,
-                        file_name="my_documentary.mp4",
-                        mime="video/mp4"
-                    )
-
-        except subprocess.TimeoutExpired:
-            st.error(
-                "वीडियो बनाने में बहुत समय लगा। "
-                "कम Images या 720p Quality के साथ फिर कोशिश करें।"
+            st.image(
+                image_file,
+                caption=image_file.name,
+                use_container_width=True
             )
 
-        except Exception as e:
-            st.error("वीडियो बनाने में समस्या आई।")
-            st.code(str(e))
 
-st.divider()
-st.caption(
-    "AI Documentary Studio | No Background Music | Hindi AI Voice"
+# ---------------- VIDEO SETTINGS ----------------
+
+st.header("5. Video Settings")
+
+quality = st.selectbox(
+    "Select Video Quality",
+    ["720p HD", "1080p Full HD"]
 )
+
+if quality == "1080p Full HD":
+    resolution = (1920, 1080)
+else:
+    resolution = (1280, 720)
+
+
+# ---------------- VIDEO GENERATION ----------------
+
+st.header("6. Create Documentary Video")
+
+st.info(
+    "Video mein sabhi uploaded images, "
+    "Center Zoom In + Zoom Out Effect "
+    "aur Hindi AI Voice use hogi. "
+    "Image idhar-udhar move nahi hogi. "
+    "Background music nahi hoga."
+)
+
+if st.button(
+    "🎬 Generate Documentary Video",
+    use_container_width=True
+):
+
+    if not uploaded_images:
+
+        st.error("Please upload documentary images.")
+
+    elif not st.session_state.voice_audio_bytes:
+
+        st.error("Please generate Hindi AI Voice first.")
+
+    else:
+
+        progress = st.progress(0)
+        status = st.empty()
+
+        try:
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+
+                status.write("Preparing images and audio...")
+
+                image_paths = []
+
+                sorted_images = sorted(
+                    uploaded_images,
+                    key=lambda x: natural_sort_key(x.name)
+                )
+
+                for i, uploaded_file in enumerate(sorted_images):
+
+                    image_path = os.path.join(
+                        temp_dir,
+                        f"image_{i:04d}.jpg"
+                    )
+
+                    image = Image.open(
+                        uploaded_file
+                    ).convert("RGB")
+
+                    image.save(
+                        image_path,
+                        quality=95
+                    )
+
+                    image_paths.append(image_path)
+
+                audio_path = os.path.join(
+                    temp_dir,
+                    "documentary_voice.mp3"
+                )
+
+                with open(audio_path, "wb") as f:
+                    f.write(st.session_state.voice_audio_bytes)
+
+                output_path = os.path.join(
+                    temp_dir,
+                    "AI_Documentary.mp4"
+                )
+
+                progress.progress(20)
+
+                status.write(
+                    f"Creating video with {len(image_paths)} images..."
+                )
+
+                build_video(
+                    image_paths,
+                    audio_path,
+                    output_path,
+                    resolution
+                )
+
+                progress.progress(100)
+
+                status.write("Video generation completed!")
+
+                with open(output_path, "rb") as f:
+                    video_bytes = f.read()
+
+                st.success("Your documentary video is ready!")
+
+                st.video(video_bytes)
+
+                st.download_button(
+                    label="⬇️ Download Documentary MP4",
+                    data=video_bytes,
+                    file_name="AI_Documentary.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
+
+        except Exception as e:
+
+            st.error(f"Video generation failed: {e}")
+
+        finally:
+
+            progress.empty()
