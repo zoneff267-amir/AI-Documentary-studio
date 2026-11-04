@@ -859,15 +859,3 @@ if (
         "Android में डाउनलोड की गई वीडियो आमतौर पर Downloads folder में मिलेगी। "
         "वहाँ से Gallery में ले जा सकते हैं।"
     )
-
-
-# ==========================================
-# FOOTER
-# ==========================================
-
-st.divider()
-
-st.markdown("""
-<div style="text-align:center; color:#aab2c0;">
-    <h4>AMIR AI DOCUMENTARY STUDIO</h4>
-    <p>Made for cinematic</p>
