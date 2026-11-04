@@ -1,10 +1,12 @@
+
 import streamlit as st
 import re
 import os
 import io
+import math
+import asyncio
 import tempfile
 import subprocess
-import asyncio
 import edge_tts
 
 from pydub import AudioSegment, effects
@@ -16,125 +18,98 @@ st.set_page_config(
 )
 
 st.title("🎬 AI Documentary Studio")
+st.write("अपनी Script, Images और Hindi AI Voice से Documentary Video बनाएँ।")
 
+# Session state
 if "voice_audio_bytes" not in st.session_state:
     st.session_state.voice_audio_bytes = None
 
 if "all_prompts" not in st.session_state:
     st.session_state.all_prompts = []
 
-
-# SCRIPT SETTINGS
+# Script
 st.header("📝 Documentary Script")
-
 script = st.text_area(
-    "अपनी पूरी हिंदी स्क्रिप्ट यहाँ डालें",
-    height=220
+    "अपनी पूरी Hindi Script यहाँ डालें",
+    height=220,
+    placeholder="अपनी Documentary Script यहाँ लिखें..."
 )
 
-scene_count = st.selectbox(
-    "कितने Image Prompts चाहिए?",
+# Settings
+st.header("⚙️ Video Settings")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    voice = st.selectbox(
+        "AI Voice चुनें",
+        ["Hindi Male", "Hindi Female"]
+    )
+
+with col2:
+    quality = st.selectbox(
+        "Video Quality",
+        ["1080p", "720p"]
+    )
+
+image_count = st.selectbox(
+    "कुल Images",
     [80, 90, 100]
 )
 
-voice = st.selectbox(
-    "AI Voice चुनें",
-    ["Hindi Male", "Hindi Female"]
-)
-
-quality = st.selectbox(
-    "Video Quality",
-    ["1080p", "720p"]
-)
-
-
-# IMAGE PROMPTS
-st.divider()
+# Image prompts
 st.header("🖼️ Image Prompt Generator")
 
 if st.button("Generate Image Prompts"):
-
     if not script.strip():
-        st.warning("पहले अपनी स्क्रिप्ट डालें।")
-
+        st.warning("पहले Script डालें।")
     else:
-        sentences = re.split(
-            r'(?<=[।.!?])\s+|\n+',
-            script.strip()
-        )
+        sentences = [
+            x.strip()
+            for x in re.split(r"(?<=[।.!?])\s+|\n+", script)
+            if x.strip()
+        ]
 
-        sentences = [s.strip() for s in sentences if s.strip()]
+        prompts = []
 
-        if not sentences:
-            st.warning("स्क्रिप्ट में वाक्य नहीं मिले।")
+        for i, sentence in enumerate(sentences):
+            prompt = (
+                f"Scene {i+1}: {sentence}\n\n"
+                "Create a cinematic 2D illustrated finance documentary image. "
+                "Indian setting, professional documentary composition, "
+                "dramatic realistic lighting, widescreen 16:9. "
+                "Keep the recurring character consistent: "
+                "30-year-old Indian gentleman, heavier build, "
+                "sky-blue shirt and black formal pants. "
+                "No text, no watermark."
+            )
+            prompts.append(prompt)
 
-        else:
-            prompts = []
-
-            for i in range(scene_count):
-
-                sentence_index = min(
-                    int(i * len(sentences) / scene_count),
-                    len(sentences) - 1
-                )
-
-                scene_text = sentences[sentence_index]
-
-                prompt = f"""
-Create a cinematic 2D illustrated documentary image.
-
-Scene {i + 1}:
-{scene_text}
-
-Visual style:
-Professional finance documentary illustration,
-Indian environment, cinematic composition,
-dramatic natural lighting, detailed background,
-16:9 widescreen composition.
-
-Recurring main character:
-A 30-year-old Indian gentleman,
-heavier build, wearing a sky-blue shirt
-and black formal pants.
-
-Keep the character consistent whenever he appears.
-No text, no captions, no watermark.
-"""
-
-                prompts.append(prompt.strip())
-
-            st.session_state.all_prompts = prompts
-            st.success(f"{len(prompts)} Image Prompts तैयार हैं।")
-
+        st.session_state.all_prompts = prompts
+        st.success(f"{len(prompts)} Image Prompts तैयार हैं।")
 
 if st.session_state.all_prompts:
-
-    for i, prompt in enumerate(st.session_state.all_prompts):
-        with st.expander(f"Scene {i + 1}"):
-            st.write(prompt)
-
-    prompt_text = "\n\n".join(
-        f"SCENE {i + 1}\n{p}"
-        for i, p in enumerate(st.session_state.all_prompts)
-    )
+    prompt_text = "\n\n".join(st.session_state.all_prompts)
 
     st.download_button(
         "📥 Download All Image Prompts",
-        data=prompt_text,
+        prompt_text,
         file_name="all_image_prompts.txt",
         mime="text/plain"
     )
 
+    with st.expander("Image Prompts देखें"):
+        for i, prompt in enumerate(st.session_state.all_prompts):
+            st.write(f"**Scene {i+1}**")
+            st.write(prompt)
 
-# HINDI AI VOICE
+# Voice generator
 st.divider()
 st.header("🎙️ Hindi AI Voice Generator")
 
 if st.button("Generate Enhanced Hindi Voice"):
-
     if not script.strip():
-        st.warning("पहले अपनी स्क्रिप्ट डालें।")
-
+        st.warning("पहले Script डालें।")
     else:
         try:
             selected_voice = (
@@ -143,48 +118,37 @@ if st.button("Generate Enhanced Hindi Voice"):
                 else "hi-IN-SwaraNeural"
             )
 
-            sentences = re.split(
-                r'(?<=[।.!?])\s+|\n+',
-                script.strip()
-            )
-
-            sentences = [s.strip() for s in sentences if s.strip()]
+            sentences = [
+                x.strip()
+                for x in re.split(r"(?<=[।.!?])\s+|\n+", script)
+                if x.strip()
+            ]
 
             chunks = []
-            current_chunk = ""
+            current = ""
 
             for sentence in sentences:
-
-                if len(current_chunk) + len(sentence) < 1800:
-                    current_chunk += sentence + " "
-
+                if len(current) + len(sentence) < 1800:
+                    current += sentence + " "
                 else:
-                    if current_chunk.strip():
-                        chunks.append(current_chunk.strip())
+                    if current.strip():
+                        chunks.append(current.strip())
+                    current = sentence + " "
 
-                    current_chunk = sentence + " "
-
-            if current_chunk.strip():
-                chunks.append(current_chunk.strip())
+            if current.strip():
+                chunks.append(current.strip())
 
             with st.spinner("Hindi AI Voice तैयार हो रही है..."):
-
                 with tempfile.TemporaryDirectory() as temp_dir:
 
                     async def create_chunks():
-
                         for i, chunk in enumerate(chunks):
-
                             path = os.path.join(
-                                temp_dir,
-                                f"part_{i}.mp3"
+                                temp_dir, f"part_{i}.mp3"
                             )
-
                             communicate = edge_tts.Communicate(
-                                chunk,
-                                selected_voice
+                                chunk, selected_voice
                             )
-
                             await communicate.save(path)
 
                     asyncio.run(create_chunks())
@@ -192,15 +156,11 @@ if st.button("Generate Enhanced Hindi Voice"):
                     final_audio = AudioSegment.empty()
 
                     for i in range(len(chunks)):
-
                         path = os.path.join(
-                            temp_dir,
-                            f"part_{i}.mp3"
+                            temp_dir, f"part_{i}.mp3"
                         )
-
-                        audio_part = AudioSegment.from_mp3(path)
-
-                        final_audio += audio_part
+                        part = AudioSegment.from_mp3(path)
+                        final_audio += part
                         final_audio += AudioSegment.silent(
                             duration=120
                         )
@@ -211,8 +171,7 @@ if st.button("Generate Enhanced Hindi Voice"):
                     )
 
                     output_path = os.path.join(
-                        temp_dir,
-                        "enhanced_voice.mp3"
+                        temp_dir, "hindi_voice.mp3"
                     )
 
                     final_audio.export(
@@ -226,11 +185,11 @@ if st.button("Generate Enhanced Hindi Voice"):
 
             st.session_state.voice_audio_bytes = audio_bytes
 
-            st.success("आपकी Enhanced Hindi Voice तैयार है!")
+            st.success("आपकी Hindi AI Voice तैयार है!")
             st.audio(audio_bytes, format="audio/mp3")
 
             st.download_button(
-                "📥 Download Enhanced Voice MP3",
+                "📥 Download Hindi Voice MP3",
                 audio_bytes,
                 file_name="enhanced_hindi_voice.mp3",
                 mime="audio/mpeg"
@@ -240,18 +199,17 @@ if st.button("Generate Enhanced Hindi Voice"):
             st.error("Voice बनाने में समस्या आई।")
             st.code(str(e))
 
-
-# AUTOMATIC VIDEO EDITOR
+# Automatic video editor
 st.divider()
 st.header("🎬 Automatic Video Editor")
 
 st.write(
     "अपनी Gemini से बनाई हुई Images अपलोड करें। "
-    "तैयार Hindi AI Voice अपने-आप वीडियो में जुड़ जाएगी।"
+    "तैयार Hindi AI Voice अपने आप Video में जुड़ जाएगी।"
 )
 
 uploaded_images = st.file_uploader(
-    "📸 अपनी Documentary Images अपलोड करें",
+    "अपनी Documentary Images अपलोड करें",
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True
 )
@@ -262,8 +220,7 @@ if uploaded_images:
 if st.session_state.voice_audio_bytes:
     st.success("Hindi AI Voice तैयार है।")
 else:
-    st.warning("पहले Hindi AI Voice तैयार करें।")
-
+    st.info("पहले Hindi AI Voice तैयार करें।")
 
 if st.button("🎬 Create Documentary Video"):
 
@@ -277,25 +234,19 @@ if st.button("🎬 Create Documentary Video"):
         st.error("पहले Hindi AI Voice तैयार करें।")
 
     else:
-
         try:
-
             with st.spinner(
-                "आपकी Documentary Video बन रही है..."
+                "आपकी Documentary Video बन रही है। कृपया प्रतीक्षा करें..."
             ):
-
-                # IMPORTANT:
-                # All temporary files and FFmpeg rendering
-                # stay inside this block.
 
                 with tempfile.TemporaryDirectory() as temp_dir:
 
-                    audio_bytes = st.session_state.voice_audio_bytes
-
+                    # Save audio
                     audio_path = os.path.join(
-                        temp_dir,
-                        "voice.mp3"
+                        temp_dir, "voice.mp3"
                     )
+
+                    audio_bytes = st.session_state.voice_audio_bytes
 
                     with open(audio_path, "wb") as f:
                         f.write(audio_bytes)
@@ -305,29 +256,17 @@ if st.button("🎬 Create Documentary Video"):
                         format="mp3"
                     ).duration_seconds
 
-                    # Sort images by filename
-                    sorted_images = sorted(
-                        uploaded_images,
-                        key=lambda f: [
-                            int(x) if x.isdigit() else x.lower()
-                            for x in re.split(r'(\d+)', f.name)
-                        ]
-                    )
-
+                    # Save uploaded images in upload order
                     image_paths = []
 
-                    for i, img in enumerate(sorted_images):
-
+                    for i, img in enumerate(uploaded_images):
                         ext = os.path.splitext(img.name)[1].lower()
 
-                        if ext not in [
-                            ".png", ".jpg", ".jpeg", ".webp"
-                        ]:
+                        if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
                             ext = ".png"
 
                         path = os.path.join(
-                            temp_dir,
-                            f"scene_{i:04d}{ext}"
+                            temp_dir, f"scene_{i:04d}{ext}"
                         )
 
                         with open(path, "wb") as f:
@@ -335,38 +274,26 @@ if st.button("🎬 Create Documentary Video"):
 
                         image_paths.append(path)
 
-                    st.write(
-                        f"Saved image files: {len(image_paths)}"
-                    )
-
-                    # Video dimensions
+                    # Video settings
                     if quality == "1080p":
                         width, height = 1920, 1080
                     else:
                         width, height = 1280, 720
 
                     fps = 24
-                    transition = 0.5
-                    number_of_images = len(image_paths)
+                    scene_duration = audio_duration / len(image_paths)
+                    frames = max(
+                        1,
+                        math.ceil(scene_duration * fps)
+                    )
 
-                    scene_duration = (
-                        audio_duration
-                        + (number_of_images - 1) * transition
-                    ) / number_of_images
-
-                    if scene_duration <= transition:
-                        raise Exception(
-                            "Voice बहुत छोटी है। कम Images या लंबी Voice इस्तेमाल करें।"
-                        )
-
-                    # FFmpeg inputs
+                    # FFmpeg command
                     command = ["ffmpeg", "-y"]
 
                     for path in image_paths:
                         command += [
                             "-loop", "1",
                             "-framerate", str(fps),
-                            "-t", str(scene_duration),
                             "-i", path
                         ]
 
@@ -374,9 +301,7 @@ if st.button("🎬 Create Documentary Video"):
 
                     filters = []
 
-                    # Zoom effect on every image
-                    for i in range(number_of_images):
-
+                    for i in range(len(image_paths)):
                         filters.append(
                             f"[{i}:v]"
                             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -384,60 +309,40 @@ if st.button("🎬 Create Documentary Video"):
                             f"zoompan=z='min(zoom+0.0005,1.08)':"
                             f"x='iw/2-(iw/zoom/2)':"
                             f"y='ih/2-(ih/zoom/2)':"
-                            f"d=1:s={width}x{height}:fps={fps},"
-                            f"setsar=1,settb=AVTB,"
-                            f"setpts=PTS-STARTPTS,format=yuv420p"
-                            f"[v{i}]"
+                            f"d={frames}:s={width}x{height}:fps={fps},"
+                            f"setsar=1,format=yuv420p[v{i}]"
                         )
 
-                    # Fade transitions
-                    previous = "[v0]"
-
-                    for i in range(1, number_of_images):
-
-                        output = f"[x{i}]"
-
-                        offset = i * (
-                            scene_duration - transition
-                        )
-
-                        filters.append(
-                            f"{previous}[v{i}]"
-                            f"xfade=transition=fade:"
-                            f"duration={transition}:"
-                            f"offset={offset:.3f}"
-                            f"{output}"
-                        )
-
-                        previous = output
-
-                    filters.append(
-                        f"{previous}format=yuv420p[vout]"
+                    video_inputs = "".join(
+                        f"[v{i}]"
+                        for i in range(len(image_paths))
                     )
 
-                    filter_complex = ";".join(filters)
+                    filters.append(
+                        f"{video_inputs}"
+                        f"concat=n={len(image_paths)}:v=1:a=0[outv]"
+                    )
 
                     output_path = os.path.join(
-                        temp_dir,
-                        "documentary.mp4"
+                        temp_dir, "documentary.mp4"
                     )
 
                     command += [
-                        "-filter_complex",
-                        filter_complex,
-                        "-map", "[vout]",
-                        "-map", f"{number_of_images}:a",
+                        "-filter_complex_threads", "1",
+                        "-filter_complex", ";".join(filters),
+                        "-map", "[outv]",
+                        "-map", f"{len(image_paths)}:a:0",
                         "-c:v", "libx264",
                         "-preset", "ultrafast",
                         "-pix_fmt", "yuv420p",
                         "-c:a", "aac",
-                        "-b:a", "192k",
+                        "-b:a", "128k",
                         "-t", str(audio_duration),
+                        "-shortest",
                         "-movflags", "+faststart",
                         output_path
                     ]
 
-                    # Run FFmpeg while images still exist
                     result = subprocess.run(
                         command,
                         capture_output=True,
@@ -446,7 +351,7 @@ if st.button("🎬 Create Documentary Video"):
                     )
 
                     if result.returncode != 0:
-                        raise Exception(result.stderr[-3000:])
+                        raise Exception(result.stderr[-4000:])
 
                     if not os.path.exists(output_path):
                         raise Exception("Video file नहीं बनी।")
@@ -454,20 +359,27 @@ if st.button("🎬 Create Documentary Video"):
                     with open(output_path, "rb") as f:
                         video_bytes = f.read()
 
-                # Temporary folder is now safely closed.
-                # Video bytes are already in memory.
+                    st.success("आपकी Documentary Video तैयार है!")
+                    st.video(video_bytes)
 
-                st.success("आपकी Documentary Video तैयार है!")
-                st.video(video_bytes)
+                    st.download_button(
+                        "📥 Download Documentary MP4",
+                        video_bytes,
+                        file_name="my_documentary.mp4",
+                        mime="video/mp4"
+                    )
 
-                st.download_button(
-                    "📥 Download Documentary MP4",
-                    video_bytes,
-                    file_name="my_documentary.mp4",
-                    mime="video/mp4"
-                )
+        except subprocess.TimeoutExpired:
+            st.error(
+                "वीडियो बनाने में बहुत समय लगा। "
+                "कम Images या 720p Quality के साथ फिर कोशिश करें।"
+            )
 
         except Exception as e:
-
             st.error("वीडियो बनाने में समस्या आई।")
             st.code(str(e))
+
+st.divider()
+st.caption(
+    "AI Documentary Studio | No Background Music | Hindi AI Voice"
+)
