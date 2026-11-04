@@ -5,6 +5,7 @@ import re
 import math
 import asyncio
 import tempfile
+import io
 import edge_tts
 import numpy as np
 
