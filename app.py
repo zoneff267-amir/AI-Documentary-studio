@@ -11,16 +11,16 @@ from PIL import Image
 from moviepy import VideoClip, AudioFileClip, concatenate_videoclips
 
 
-# ==================== PAGE SETTINGS ====================
+# ================= PAGE CONFIG =================
 
 st.set_page_config(
     page_title="AMIR AI Documentary Studio",
     page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="wide"
 )
 
-# ==================== PROFESSIONAL DESIGN ====================
+
+# ================= PROFESSIONAL DESIGN =================
 
 st.markdown("""
 <style>
@@ -28,22 +28,20 @@ st.markdown("""
     background-color: #10131b;
 }
 .main-title {
-    text-align: center;
-    font-size: 34px;
+    color: white;
+    font-size: 27px;
     font-weight: 800;
-    color: #ffffff;
-    margin-bottom: 4px;
+    line-height: 1.2;
 }
 .sub-title {
-    text-align: center;
     color: #aab4c5;
-    font-size: 15px;
-    margin-bottom: 25px;
+    font-size: 13px;
+    margin-top: 7px;
 }
 .section-title {
+    color: white;
     font-size: 21px;
     font-weight: 700;
-    color: #ffffff;
     padding-top: 12px;
 }
 div.stButton > button {
@@ -54,20 +52,34 @@ div.stButton > button {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="main-title">AMIR AI DOCUMENTARY STUDIO</div>',
-    unsafe_allow_html=True
+
+# ================= LOGO AND TITLE =================
+
+logo_col, title_col = st.columns(
+    [1, 3.5],
+    vertical_alignment="center"
 )
 
-st.markdown(
-    '<div class="sub-title">Create Professional Hindi Documentary Videos</div>',
-    unsafe_allow_html=True
-)
+with logo_col:
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=125)
+    else:
+        st.markdown("## 🎬")
+
+with title_col:
+    st.markdown(
+        '<div class="main-title">AMIR AI DOCUMENTARY STUDIO</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div class="sub-title">Professional Hindi Documentary Creation</div>',
+        unsafe_allow_html=True
+    )
 
 st.divider()
 
 
-# ==================== SESSION STATE ====================
+# ================= SESSION STATE =================
 
 if "voice_audio" not in st.session_state:
     st.session_state.voice_audio = None
@@ -76,19 +88,21 @@ if "prompts" not in st.session_state:
     st.session_state.prompts = []
 
 
-# ==================== SCRIPT ====================
+# ================= SCRIPT =================
 
-st.markdown('<div class="section-title">1. Documentary Script</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">1. Documentary Script</div>',
+    unsafe_allow_html=True
+)
 
 script = st.text_area(
-    "Paste your documentary script",
+    "Paste your Hindi documentary script",
     height=200,
-    placeholder="Yahan apni Hindi documentary script paste karein..."
+    placeholder="Yahan apni complete Hindi script paste karein..."
 )
 
 
-# ==================== IMAGE PROMPTS ====================
+# ================= PROMPT GENERATOR =================
 
 def split_script(text):
     parts = re.split(r'(?<=[।.!?])\s+', text.strip())
@@ -96,6 +110,7 @@ def split_script(text):
 
 
 def make_prompts(text, count):
+
     sentences = split_script(text)
 
     if not sentences:
@@ -104,6 +119,7 @@ def make_prompts(text, count):
     prompts = []
 
     for i in range(count):
+
         index = min(
             int(i * len(sentences) / count),
             len(sentences) - 1
@@ -139,8 +155,10 @@ No 3D, no anime, no photorealism.
     return prompts
 
 
-st.markdown('<div class="section-title">2. Image Prompt Generator</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">2. Image Prompt Generator</div>',
+    unsafe_allow_html=True
+)
 
 prompt_count = st.selectbox(
     "Number of image prompts",
@@ -152,31 +170,28 @@ if st.button("Generate Image Prompts", use_container_width=True):
 
     if not script.strip():
         st.error("Please paste your script first.")
-
     else:
         st.session_state.prompts = make_prompts(
             script,
             prompt_count
         )
-
         st.success(
             f"{len(st.session_state.prompts)} prompts generated!"
         )
 
 
 if st.session_state.prompts:
-
     for i, prompt in enumerate(st.session_state.prompts, 1):
-
         with st.expander(f"Image Prompt {i}"):
-
             st.code(prompt, language="text")
 
 
-# ==================== AI VOICE ====================
+# ================= HINDI AI VOICE =================
 
-st.markdown('<div class="section-title">3. Hindi AI Voice Generator</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">3. Hindi AI Voice Generator</div>',
+    unsafe_allow_html=True
+)
 
 voice_choice = st.selectbox(
     "Select Hindi Voice",
@@ -204,13 +219,10 @@ async def generate_voice(text, voice, output_path):
 if st.button("Generate Hindi AI Voice", use_container_width=True):
 
     if not script.strip():
-
         st.error("Please paste your script first.")
 
     else:
-
         try:
-
             with st.spinner("Generating Hindi AI Voice..."):
 
                 with tempfile.TemporaryDirectory() as folder:
@@ -252,30 +264,39 @@ if st.session_state.voice_audio:
     )
 
 
-# ==================== IMAGE UPLOAD ====================
+# ================= MULTIPLE IMAGE UPLOAD =================
 
-st.markdown('<div class="section-title">4. Upload Documentary Images</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">4. Upload All Documentary Images</div>',
+    unsafe_allow_html=True
+)
 
-st.caption(
-    "Images jis order mein select/upload hongi, video mein bhi wahi order rahega."
+st.write(
+    "Ek hi baar mein apni saari documentary images select karein."
+)
+
+st.info(
+    "Phone ke image picker mein pehli image ko long-press karein, "
+    "phir baaki images select karke Open dabayein."
 )
 
 uploaded_images = st.file_uploader(
-    "Select multiple images",
+    "Select Multiple Images Together",
     type=["png", "jpg", "jpeg", "webp"],
     accept_multiple_files=True,
-    key="documentary_images"
+    key="all_documentary_images"
 )
+
+
+# ================= IMAGE PREVIEW AND NUMBERING =================
 
 if uploaded_images:
 
-    st.success(f"{len(uploaded_images)} images uploaded successfully.")
+    st.success(
+        f"Total {len(uploaded_images)} images selected successfully."
+    )
 
-    st.subheader("Image Sequence")
-
-    # Upload order is preserved.
-    # Image names are assigned automatically.
+    st.subheader("Your Image Sequence")
 
     for index, image_file in enumerate(uploaded_images, start=1):
 
@@ -289,25 +310,26 @@ if uploaded_images:
                     use_container_width=True
                 )
             except Exception:
-                st.warning("Preview unavailable")
+                st.warning("Image preview unavailable.")
 
         with col2:
-            st.markdown(f"**Image {index}**")
+            st.markdown(f"### Image {index}")
             st.caption(f"Original file: {image_file.name}")
-            st.caption(f"Video sequence: Scene {index}")
+            st.caption(f"Video position: Scene {index}")
 
         st.divider()
 
-    st.info(
-        "Automatic numbering: Image 1, Image 2, Image 3... "
-        "Original filenames will not change the video sequence."
+    st.success(
+        "All selected images will be used in the same upload order."
     )
 
 
-# ==================== VIDEO QUALITY ====================
+# ================= VIDEO SETTINGS =================
 
-st.markdown('<div class="section-title">5. Video Settings</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">5. Video Settings</div>',
+    unsafe_allow_html=True
+)
 
 quality = st.selectbox(
     "Select Video Quality",
@@ -320,9 +342,14 @@ else:
     resolution = (1280, 720)
 
 
-# ==================== CENTER ZOOM EFFECT ====================
+# ================= CENTER ZOOM EFFECT =================
 
-def create_center_zoom_clip(image_path, width, height, duration):
+def create_center_zoom_clip(
+    image_path,
+    width,
+    height,
+    duration
+):
 
     image = Image.open(image_path).convert("RGB")
 
@@ -348,7 +375,7 @@ def create_center_zoom_clip(image_path, width, height, duration):
             1
         )
 
-        # Smooth center zoom in and zoom out
+        # Smooth center Zoom In and Zoom Out
         zoom = 1 + 0.07 * (
             0.5 - 0.5 * np.cos(2 * np.pi * progress)
         )
@@ -361,7 +388,7 @@ def create_center_zoom_clip(image_path, width, height, duration):
             Image.Resampling.LANCZOS
         )
 
-        # Always crop from the exact center
+        # Fixed center crop: no side movement
         left = (new_width - width) // 2
         top = (new_height - height) // 2
 
@@ -382,9 +409,14 @@ def create_center_zoom_clip(image_path, width, height, duration):
     )
 
 
-# ==================== VIDEO CREATION ====================
+# ================= VIDEO CREATION =================
 
-def create_documentary(image_paths, audio_path, output_path, resolution):
+def create_documentary(
+    image_paths,
+    audio_path,
+    output_path,
+    resolution
+):
 
     width, height = resolution
     fps = 24
@@ -400,6 +432,7 @@ def create_documentary(image_paths, audio_path, output_path, resolution):
     scene_duration = audio.duration / total_images
 
     clips = []
+    final_video = None
 
     try:
 
@@ -432,9 +465,10 @@ def create_documentary(image_paths, audio_path, output_path, resolution):
             logger=None
         )
 
-        final_video.close()
-
     finally:
+
+        if final_video is not None:
+            final_video.close()
 
         audio.close()
 
@@ -442,14 +476,16 @@ def create_documentary(image_paths, audio_path, output_path, resolution):
             clip.close()
 
 
-# ==================== GENERATE VIDEO ====================
+# ================= GENERATE DOCUMENTARY =================
 
-st.markdown('<div class="section-title">6. Create Documentary Video</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">6. Create Documentary Video</div>',
+    unsafe_allow_html=True
+)
 
 st.info(
-    "Features: All images included, automatic image numbering, "
-    "center Zoom In + Zoom Out, Hindi AI Voice, MP4 download. "
+    "Features: All uploaded images, automatic numbering, "
+    "Center Zoom In + Zoom Out, Hindi AI Voice and MP4 download. "
     "No side movement and no background music."
 )
 
@@ -459,11 +495,9 @@ if st.button(
 ):
 
     if not uploaded_images:
-
-        st.error("Please upload images first.")
+        st.error("Please upload your images first.")
 
     elif not st.session_state.voice_audio:
-
         st.error("Please generate Hindi AI Voice first.")
 
     else:
@@ -475,15 +509,14 @@ if st.button(
 
             with tempfile.TemporaryDirectory() as folder:
 
-                status.write("Preparing numbered images...")
+                status.write("Preparing all numbered images...")
 
                 image_paths = []
 
-                # IMPORTANT:
-                # Keep the exact upload order.
-                # First uploaded image = image_1.jpg
-                # Second uploaded image = image_2.jpg
-                # Third uploaded image = image_3.jpg
+                # Upload order is preserved.
+                # First upload = Image_1
+                # Second upload = Image_2
+                # Third upload = Image_3
 
                 for index, uploaded_file in enumerate(
                     uploaded_images,
@@ -492,7 +525,7 @@ if st.button(
 
                     image_path = os.path.join(
                         folder,
-                        f"image_{index}.jpg"
+                        f"Image_{index}.jpg"
                     )
 
                     image = Image.open(
@@ -522,7 +555,7 @@ if st.button(
                 )
 
                 status.write(
-                    f"Creating video using {len(image_paths)} numbered images..."
+                    f"Creating video with {len(image_paths)} images..."
                 )
 
                 create_documentary(
@@ -552,16 +585,14 @@ if st.button(
                 )
 
         except Exception as error:
-
             st.error(f"Video generation error: {error}")
 
         finally:
-
             progress.empty()
             status.empty()
 
 
-# ==================== FOOTER ====================
+# ================= FOOTER =================
 
 st.divider()
 
@@ -571,4 +602,4 @@ st.markdown(
     "<br>Professional Documentary Creation"
     "</p>",
     unsafe_allow_html=True
-)
+                )
