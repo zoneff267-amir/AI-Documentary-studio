@@ -8,6 +8,7 @@ import tempfile
 import os
 import io
 from pydub import AudioSegment, effects
+import subprocess
 st.set_page_config(
     page_title="AI Documentary Studio",
     page_icon="🎬",
@@ -35,8 +36,15 @@ voice = st.selectbox(
 
 quality = st.selectbox(
     "Video Quality",
-    ["1080p", "720p"]
+    ["1080p", "720p"])
+uploaded_images = st.file_uploader(
+    "📸 अपनी सभी Documentary Images अपलोड करें",
+    type=["jpg", "jpeg", "png", "webp"],
+    accept_multiple_files=True
 )
+
+if uploaded_images:
+    st.success(f"आपने {len(uploaded_images)} Images अपलोड की हैं।")
 
 if st.button("Generate Image Prompts"):
     if not script.strip():
