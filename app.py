@@ -259,6 +259,12 @@ if st.button("🎬 Create Documentary Video"):
                 filters = []
 
                 for i in range(len(image_paths)):
+                    command += [
+        "-loop", "1",
+        "-framerate", str(fps),
+        "-t", str(scene_duration),
+        "-i", image_paths[i]
+                        ]
                     filters.append(
                         f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
                         f"crop={width}:{height},"
@@ -286,7 +292,7 @@ if st.button("🎬 Create Documentary Video"):
                     previous = output
 
                 filters.append(f"{previous}format=yuv420p[out]")
-                        command += [
+                command += [
                             "-i", audio_path,
                             "-filter_complex", ";".join(filters),
                             "-map", "[vout]",
@@ -299,9 +305,9 @@ if st.button("🎬 Create Documentary Video"):
                             "-shortest",
                             "-movflags", "+faststart",
                             os.path.join(temp_dir, "documentary.mp4")
-                        ]
+                           ]
 
-                        result = subprocess.run(
+               result = subprocess.run(
                             command,
                             capture_output=True,
                             text=True,
