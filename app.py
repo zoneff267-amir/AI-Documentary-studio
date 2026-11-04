@@ -162,7 +162,7 @@ if st.button("Generate Enhanced Hindi Voice"):
 
                     with open(output_path, "rb") as f:
                         audio_bytes = f.read()
-
+            st.session_state["voice_audio_bytes"] = audio_bytes
             st.success("आपकी Enhanced Hindi Voice तैयार है!")
             st.audio(audio_bytes, format="audio/mp3")
 
