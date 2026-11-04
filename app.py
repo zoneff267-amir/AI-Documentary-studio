@@ -241,6 +241,7 @@ if st.button("🎬 Create Documentary Video"):
                             with open(path, "wb") as f:
                                 f.write(img.getvalue())
                             image_paths.append(path)
+                            st.write("Saved image files:", image_paths)
 
                         width, height = (
                             (1920, 1080) if quality == "1080p"
