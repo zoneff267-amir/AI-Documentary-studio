@@ -2,25 +2,15 @@
 import streamlit as st
 import os
 import re
-import math
 import asyncio
 import tempfile
 import io
-import edge_tts
 import numpy as np
+import edge_tts
 
-from PIL import Image
-from moviepy import (
-    VideoClip,
-    AudioFileClip,
-    CompositeVideoClip,
-    concatenate_audioclips
-)
-
-
-# ==========================================
-# SETTINGS
-# ==========================================
+from PIL import Image, ImageDraw, ImageFont
+from faster_whisper import WhisperModel
+from moviepy import VideoClip, AudioFileClip
 
 st.set_page_config(
     page_title="AMIR AI DOCUMENTARY STUDIO",
@@ -30,169 +20,103 @@ st.set_page_config(
 
 MAX_SCENE_WORDS = 30
 
-
-# ==========================================
-# DESIGN
-# ==========================================
-
 st.markdown("""
 <style>
-.stApp {
-    background: #10131b;
-    color: #ffffff;
-}
-section[data-testid="stSidebar"] {
-    background: #171c29;
-}
-h1, h2, h3 {
-    color: #f5c76b !important;
-}
-div[data-testid="stMetric"] {
-    background: #1c2433;
-    border: 1px solid #394354;
-    padding: 15px;
-    border-radius: 12px;
-}
+.stApp {background:#10131b;color:#fff}
+section[data-testid="stSidebar"] {background:#171c29}
+h1,h2,h3 {color:#f5c76b !important}
 .stButton button {
-    background: #d49b36;
-    color: #111111;
-    font-weight: bold;
-    border-radius: 8px;
-    border: none;
-    min-height: 45px;
-}
-.stButton button:hover {
-    background: #f0bd58;
-    color: #111111;
+    background:#d49b36;
+    color:#111;
+    font-weight:bold;
+    border-radius:8px;
+    min-height:43px
 }
 </style>
 """, unsafe_allow_html=True)
 
+st.title("🎬 AMIR AI DOCUMENTARY STUDIO")
+st.caption("AI Documentary Video Creator")
+st.info(
+    "Video mein left side image, right side subtitles "
+    "aur neeche animated audio waveform hogi."
+)
 
-# ==========================================
-# LOGO AND HEADER
-# ==========================================
-
-if os.path.exists("logo.png"):
-    st.image("logo.png", width=300)
-
-st.title("AMIR AI DOCUMENTARY STUDIO")
-st.caption("AI-powered Hindi Documentary Video Creator")
-st.divider()
-
-
-# ==========================================
-# AUTOMATIC SCRIPT TO SCENE CONVERTER
-# ==========================================
+# ----------------------------------
+# SCRIPT TO SCENE CONVERTER
+# ----------------------------------
 
 def split_long_sentence(sentence, max_words):
     words = sentence.split()
-    chunks = []
-
-    for i in range(0, len(words), max_words):
-        chunk = " ".join(words[i:i + max_words])
-        if chunk:
-            chunks.append(chunk)
-
-    return chunks
+    return [
+        " ".join(words[i:i + max_words])
+        for i in range(0, len(words), max_words)
+        if words[i:i + max_words]
+    ]
 
 
 def split_script_into_scenes(text, max_words=MAX_SCENE_WORDS):
-
     if not text or not text.strip():
         return []
 
-    # Normalize spaces and line breaks.
     text = re.sub(r"\s+", " ", text.strip())
 
-    # Split at sentence endings in Hindi and English.
     sentences = re.split(
         r"(?<=[।!?])\s+|(?<=[.!?])\s+",
         text
     )
 
-    sentences = [
-        sentence.strip()
-        for sentence in sentences
-        if sentence.strip()
-    ]
+    smaller = []
 
-    # Break unusually long sentences at word boundaries.
-    smaller_sentences = []
-
-    for sentence in sentences:
-
-        words = sentence.split()
-
-        if len(words) > max_words:
-            smaller_sentences.extend(
+    for sentence in filter(None, (s.strip() for s in sentences)):
+        if len(sentence.split()) > max_words:
+            smaller.extend(
                 split_long_sentence(sentence, max_words)
             )
         else:
-            smaller_sentences.append(sentence)
+            smaller.append(sentence)
 
-    # Combine complete sentences into scenes.
     scenes = []
-    current_scene = []
-    current_count = 0
+    current = []
+    count = 0
 
-    for sentence in smaller_sentences:
+    for sentence in smaller:
+        n = len(sentence.split())
 
-        sentence_words = len(sentence.split())
+        if current and count + n > max_words:
+            scenes.append(" ".join(current))
+            current = []
+            count = 0
 
-        if (
-            current_scene
-            and current_count + sentence_words > max_words
-        ):
-            scenes.append(" ".join(current_scene))
-            current_scene = []
-            current_count = 0
+        current.append(sentence)
+        count += n
 
-        current_scene.append(sentence)
-        current_count += sentence_words
-
-    if current_scene:
-        scenes.append(" ".join(current_scene))
+    if current:
+        scenes.append(" ".join(current))
 
     return scenes
 
 
-def count_words(text):
-    return len(re.findall(r"\S+", text))
-
-
-def estimate_duration(words):
-
-    if words <= 0:
-        return 0, 0
-
-    # Approximate Hindi narration speed.
-    return words / 135, words / 115
-
-
-# ==========================================
-# IMAGE PROMPT CREATOR
-# ==========================================
+# ----------------------------------
+# IMAGE PROMPT GENERATOR
+# ----------------------------------
 
 def create_scene_prompt(scene, number):
-
     return f"""
 Create a cinematic 2D illustrated documentary image.
 
 SCENE {number}:
-
 {scene}
 
 VISUAL STYLE:
-Professional finance documentary illustration.
-Indian environment and Indian surroundings.
+Professional 2D hand-drawn documentary illustration.
+Indian environment.
 Cinematic lighting.
 Detailed storytelling composition.
-Professional 2D hand-drawn illustration.
 Dramatic documentary atmosphere.
-16:9 widescreen aspect ratio.
+16:9 widescreen.
 
-RECURRING MAIN CHARACTER WHEN NEEDED:
+MAIN CHARACTER WHEN NEEDED:
 30-year-old Indian gentleman.
 Heavier build.
 Sky-blue shirt.
@@ -203,102 +127,252 @@ No text.
 No watermark.
 No subtitles.
 No 3D rendering.
-No anime style.
+No anime.
 """
 
 
-# ==========================================
+# ----------------------------------
 # AI VOICE
-# ==========================================
+# ----------------------------------
 
 async def generate_voice(text, voice, output_path):
-
-    communicate = edge_tts.Communicate(
+    tts = edge_tts.Communicate(
         text,
         voice,
         rate="+0%",
         volume="+0%"
     )
+    await tts.save(output_path)
 
-    await communicate.save(output_path)
+
+# ----------------------------------
+# IMAGE AND FONT HELPERS
+# ----------------------------------
+
+def load_font(size, bold=False):
+    paths = [
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf"
+        if bold else
+        "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold else
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    ]
+
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size=size)
+            except Exception:
+                pass
+
+    return ImageFont.load_default()
 
 
-# ==========================================
-# STABLE CENTER ZOOM
-# ==========================================
+def cover_image(image, size):
+    w, h = size
+    iw, ih = image.size
 
-def create_zoom_clip(image_path, width, height, duration):
-
-    image = Image.open(image_path).convert("RGB")
-
-    original_width, original_height = image.size
-
-    scale = max(
-        width / original_width,
-        height / original_height
-    )
-
-    new_width = int(original_width * scale)
-    new_height = int(original_height * scale)
+    scale = max(w / iw, h / ih)
 
     image = image.resize(
-        (new_width, new_height),
+        (int(iw * scale), int(ih * scale)),
         Image.Resampling.LANCZOS
     )
 
-    left = (new_width - width) // 2
-    top = (new_height - height) // 2
+    x = (image.width - w) // 2
+    y = (image.height - h) // 2
 
-    image = image.crop((
-        left,
-        top,
-        left + width,
-        top + height
-    ))
+    return image.crop((x, y, x + w, y + h))
 
-    def make_frame(t):
 
-        progress = min(
-            max(t / max(duration, 0.001), 0),
-            1
-        )
+def wrap_text(draw, text, font, max_width):
+    words = text.split()
+    lines = []
+    line = ""
 
-        # Smooth center zoom in and out.
-        # No pan, no shake, no random movement.
+    for word in words:
+        trial = word if not line else line + " " + word
 
-        zoom = 1.0 + 0.055 * (
-            0.5 - 0.5 * math.cos(2 * math.pi * progress)
-        )
+        if draw.textbbox((0, 0), trial, font=font)[2] <= max_width:
+            line = trial
+        else:
+            if line:
+                lines.append(line)
+            line = word
 
-        zoom_width = int(width * zoom)
-        zoom_height = int(height * zoom)
+    if line:
+        lines.append(line)
 
-        enlarged = image.resize(
-            (zoom_width, zoom_height),
-            Image.Resampling.LANCZOS
-        )
+    return lines or [""]
 
-        crop_left = (zoom_width - width) // 2
-        crop_top = (zoom_height - height) // 2
 
-        frame = enlarged.crop((
-            crop_left,
-            crop_top,
-            crop_left + width,
-            crop_top + height
-        ))
+# ----------------------------------
+# VIDEO FRAME DESIGN
+# ----------------------------------
 
-        return np.asarray(frame)
+def build_visual_frame(
+    t, pics, subtitles, samples,
+    duration, W, H, subtitle_size
+):
+    left = int(W * 0.64)
+    right = W - left
+    pad = int(right * 0.07)
 
-    return VideoClip(
-        frame_function=make_frame,
-        duration=duration
+    scene_idx = min(
+        int(t / max(duration, 0.001) * len(pics)),
+        len(pics) - 1
     )
 
+    canvas = Image.new("RGB", (W, H), (8, 13, 25))
+    canvas.paste(pics[scene_idx], (0, 0))
 
-# ==========================================
-# SIDEBAR
-# ==========================================
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rectangle(
+        (left, 0, W, H),
+        fill=(9, 14, 27)
+    )
+
+    draw.rectangle(
+        (left, 0, left + 5, H),
+        fill=(205, 164, 91)
+    )
+
+    title_font = load_font(max(22, int(H * 0.035)), True)
+
+    sub_font = load_font(
+        subtitle_size if H == 720
+        else int(subtitle_size * 1.35),
+        True
+    )
+
+    small_font = load_font(max(17, int(H * 0.024)))
+
+    draw.text(
+        (left + pad, int(H * 0.055)),
+        "DOCUMENTARY",
+        font=title_font,
+        fill=(225, 190, 120)
+    )
+
+    # Current subtitle
+    caption = ""
+
+    for seg in subtitles:
+        if seg["start"] <= t < seg["end"]:
+            caption = seg["text"]
+            break
+
+    lines = wrap_text(
+        draw,
+        caption,
+        sub_font,
+        right - 2 * pad
+    )
+
+    line_h = int(sub_font.size * 1.42)
+    total = len(lines) * line_h
+
+    y = int(H * 0.20) + (int(H * 0.53) - total) // 2
+
+    if caption:
+        draw.rounded_rectangle(
+            (left + pad - 10, y - 12, W - pad + 8, y + total + 12),
+            radius=14,
+            fill=(20, 28, 44)
+        )
+
+        for line in lines:
+            draw.text(
+                (left + pad, y),
+                line,
+                font=sub_font,
+                fill="white",
+                stroke_width=1,
+                stroke_fill="black"
+            )
+            y += line_h
+
+    # Animated audio waveform
+    wave_top = int(H * 0.79)
+    wave_bottom = int(H * 0.935)
+    center_y = (wave_top + wave_bottom) // 2
+
+    draw.text(
+        (left + pad, int(H * 0.765)),
+        "AUDIO WAVEFORM",
+        font=small_font,
+        fill=(170, 183, 202)
+    )
+
+    n = 60
+    usable = right - 2 * pad
+    gap = max(2, int(usable * 0.006))
+    bar_width = max(
+        2,
+        int((usable - (n - 1) * gap) / n)
+    )
+
+    sample_rate = 8000
+    center_sample = int(t * sample_rate)
+    window = int(sample_rate * 0.035)
+    max_amp = (wave_bottom - wave_top) // 2
+
+    for k in range(n):
+        offset = int((k / n - 0.5) * sample_rate * 0.4)
+
+        start = max(
+            0,
+            center_sample + offset - window // 2
+        )
+
+        end = min(
+            len(samples),
+            start + window
+        )
+
+        if end > start:
+            rms = float(
+                np.sqrt(np.mean(samples[start:end] ** 2))
+            )
+        else:
+            rms = 0.0
+
+        amp = int(min(1.0, rms * 3.8) * max_amp)
+
+        x = left + pad + k * (bar_width + gap)
+
+        draw.rounded_rectangle(
+            (
+                x,
+                center_y - amp,
+                x + bar_width,
+                center_y + amp
+            ),
+            radius=max(1, bar_width // 2),
+            fill=(225, 177, 93)
+        )
+
+    footer = (
+        f"SCENE {scene_idx + 1:02d}/{len(pics):02d} "
+        f" • {int(t // 60):02d}:{int(t % 60):02d}"
+    )
+
+    draw.text(
+        (left + pad, int(H * 0.955)),
+        footer,
+        font=small_font,
+        fill=(145, 158, 179)
+    )
+
+    return np.asarray(canvas)
+
+
+# ----------------------------------
+# SIDEBAR SETTINGS
+# ----------------------------------
 
 st.sidebar.title("VIDEO SETTINGS")
 
@@ -307,488 +381,389 @@ voice_choice = st.sidebar.selectbox(
     ["Male Voice", "Female Voice"]
 )
 
-if voice_choice == "Male Voice":
-    selected_voice = "hi-IN-MadhurNeural"
-else:
-    selected_voice = "hi-IN-SwaraNeural"
+voice_id = (
+    "hi-IN-MadhurNeural"
+    if voice_choice == "Male Voice"
+    else "hi-IN-SwaraNeural"
+)
 
-
-resolution_choice = st.sidebar.selectbox(
+resolution = st.sidebar.selectbox(
     "Video Resolution",
     ["720p", "1080p"]
 )
 
-if resolution_choice == "720p":
-    video_width = 1280
-    video_height = 720
-else:
-    video_width = 1920
-    video_height = 1080
-
-
-transition_duration = st.sidebar.slider(
-    "Smooth Crossfade Duration",
-    min_value=0.3,
-    max_value=1.2,
-    value=0.7,
-    step=0.1
+W, H = (
+    (1280, 720)
+    if resolution == "720p"
+    else (1920, 1080)
 )
 
-st.sidebar.info(
-    "No background music. Only AI Hindi voice."
+subtitle_size = st.sidebar.slider(
+    "Subtitle font size",
+    24, 48, 34, 2
 )
 
+subtitle_language = st.sidebar.selectbox(
+    "Subtitle language",
+    ["Auto Detect", "Hindi", "English"]
+)
 
-# ==========================================
+st.sidebar.caption("No background music. Voice only.")
+
+
+# ----------------------------------
 # 1. SCRIPT ANALYZER
-# ==========================================
+# ----------------------------------
 
 st.header("1. Paste Your Complete Script")
 
-st.write(
-    "ChatGPT से पूरी स्क्रिप्ट कॉपी करके यहाँ Paste करें। "
-    "Scene-wise तोड़ने या Scene Number लिखने की जरूरत नहीं है।"
-)
-
 script = st.text_area(
-    "Your complete documentary script",
-    height=280,
-    placeholder="Yahan apni poori Hindi documentary script paste karein...",
-    key="main_script"
+    "Your documentary script",
+    height=230,
+    placeholder="Yahan apni poori Hindi script paste karein..."
 )
 
 scenes = split_script_into_scenes(script)
-word_count = count_words(script)
 
-minimum_duration, maximum_duration = estimate_duration(
-    word_count
-)
+word_count = len(re.findall(r"\S+", script))
 
 if script.strip():
+    c1, c2, c3, c4 = st.columns(4)
 
-    st.subheader("AUTOMATIC SCRIPT ANALYSIS")
+    c1.metric("Total Scenes", len(scenes))
+    c2.metric("Images Required", len(scenes))
+    c3.metric("Total Words", word_count)
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Total Scenes",
-        len(scenes)
-    )
-
-    col2.metric(
-        "Images Required",
-        len(scenes)
-    )
-
-    col3.metric(
-        "Total Words",
-        word_count
-    )
-
-    col4.metric(
+    c4.metric(
         "Estimated Video",
-        f"{minimum_duration:.1f}–{maximum_duration:.1f} min"
-    )
-
-    st.success(
-        f"आपकी पूरी स्क्रिप्ट से {len(scenes)} Scenes बनेंगे। "
-        f"आपको {len(scenes)} Images की जरूरत होगी।"
-    )
-
-    st.caption(
-        "Scenes वाक्यों के आधार पर अपने-आप बनाए गए हैं। "
-        "लगभग 30 शब्द प्रति Scene का लक्ष्य रखा गया है।"
+        f"{word_count / 135:.1f}–{word_count / 115:.1f} min"
     )
 
     with st.expander("View Automatically Created Scenes"):
-
-        for i, scene in enumerate(scenes, start=1):
-
-            st.markdown(f"**Scene {i} — Image {i}**")
+        for i, scene in enumerate(scenes, 1):
+            st.markdown(f"**Scene {i}**")
             st.write(scene)
             st.divider()
 
-else:
 
-    st.info(
-        "पूरी स्क्रिप्ट Paste करते ही Scene, Image और "
-        "वीडियो अवधि की गिनती दिखाई देगी।"
-    )
-
-
-# ==========================================
+# ----------------------------------
 # 2. IMAGE PROMPTS
-# ==========================================
+# ----------------------------------
 
 st.divider()
-st.header("2. Generate Image Prompts")
+st.header("2. Scene-wise Image Prompts")
 
 if st.button(
     "Generate All Scene-wise Image Prompts",
     disabled=not scenes,
     use_container_width=True
 ):
-
     st.session_state["prompts"] = [
         create_scene_prompt(scene, i)
-        for i, scene in enumerate(scenes, start=1)
+        for i, scene in enumerate(scenes, 1)
     ]
 
     st.session_state["prompt_script"] = script
-
 
 if (
     st.session_state.get("prompt_script") == script
     and st.session_state.get("prompts")
 ):
-
     for i, prompt in enumerate(
-        st.session_state["prompts"],
-        start=1
+        st.session_state["prompts"], 1
     ):
-
         with st.expander(f"Image Prompt {i}"):
-
             st.code(prompt, language="text")
 
 
-# ==========================================
+# ----------------------------------
 # 3. UPLOAD IMAGES
-# ==========================================
+# ----------------------------------
 
 st.divider()
 st.header("3. Upload Images")
 
 st.write(
-    "Gemini से बनाई गई Images Scene के क्रम में Upload करें। "
-    "पहली Image Scene 1 के लिए होगी।"
+    "Images ko scene order mein upload karein. "
+    "Pehli image Scene 1 ke liye hogi."
 )
 
 uploaded_images = st.file_uploader(
-    "Select all your documentary images",
+    "Select all documentary images",
     type=["png", "jpg", "jpeg", "webp"],
-    accept_multiple_files=True,
-    key="image_upload"
+    accept_multiple_files=True
 )
 
 if uploaded_images:
+    st.success(f"{len(uploaded_images)} images uploaded.")
 
-    st.success(
-        f"{len(uploaded_images)} Images uploaded."
-    )
-
-    if len(uploaded_images) != len(scenes):
-
+    if scenes and len(uploaded_images) != len(scenes):
         st.warning(
-            f"आपकी स्क्रिप्ट में {len(scenes)} Scenes हैं, "
-            f"लेकिन आपने {len(uploaded_images)} Images Upload की हैं।"
+            f"{len(scenes)} scenes hain, "
+            f"lekin {len(uploaded_images)} images upload hui hain."
         )
 
-    for i, uploaded in enumerate(uploaded_images, start=1):
-        st.write(f"Image {i}: {uploaded.name}")
 
-
-# ==========================================
-# 4. GENERATE VOICE
-# ==========================================
+# ----------------------------------
+# 4. ADD NARRATION AUDIO
+# ----------------------------------
 
 st.divider()
-st.header("4. Generate Hindi AI Voice")
+st.header("4. Add Narration Audio")
 
-if st.button(
-    "Generate All Scene-wise Hindi Voice",
-    disabled=not scenes,
-    use_container_width=True
-):
-
-    voice_segments = []
-
-    progress = st.progress(0)
-    status = st.empty()
-
-    try:
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-
-            for i, scene in enumerate(scenes, start=1):
-
-                status.write(
-                    f"Generating voice {i}/{len(scenes)}..."
-                )
-
-                output_path = os.path.join(
-                    temp_dir,
-                    f"voice_{i}.mp3"
-                )
-
-                asyncio.run(
-                    generate_voice(
-                        scene,
-                        selected_voice,
-                        output_path
-                    )
-                )
-
-                with open(output_path, "rb") as f:
-                    voice_segments.append(f.read())
-
-                progress.progress(
-                    i / len(scenes)
-                )
-
-        st.session_state["voice_segments"] = voice_segments
-        st.session_state["voice_scene_texts"] = list(scenes)
-        st.session_state["voice_script"] = script
-        st.session_state["voice_type"] = selected_voice
-
-        st.session_state.pop("final_video", None)
-        st.session_state.pop("final_video_script", None)
-
-        status.success(
-            "All Hindi voice segments are ready!"
-        )
-
-    except Exception as error:
-
-        st.error(
-            f"Voice generation error: {error}"
-        )
-
-
-voice_ready = (
-    st.session_state.get("voice_script") == script
-    and st.session_state.get("voice_type") == selected_voice
-    and st.session_state.get("voice_scene_texts") == scenes
-    and len(st.session_state.get("voice_segments", [])) == len(scenes)
+audio_mode = st.radio(
+    "Narration kaise add karenge?",
+    [
+        "Upload my own audio",
+        "Generate Hindi AI voice from script"
+    ],
+    horizontal=True
 )
 
-if voice_ready:
+uploaded_audio = None
 
-    st.success(
-        f"{len(scenes)} Hindi voice segments are ready."
+if audio_mode == "Upload my own audio":
+
+    uploaded_audio = st.file_uploader(
+        "Upload complete narration (MP3/WAV/M4A)",
+        type=["mp3", "wav", "m4a"]
     )
 
-    for i, audio_data in enumerate(
-        st.session_state["voice_segments"],
-        start=1
+else:
+
+    if st.button(
+        "Generate Hindi AI Voice",
+        disabled=not scenes,
+        use_container_width=True
     ):
 
-        st.caption(f"Scene {i} Voice")
-        st.audio(audio_data, format="audio/mp3")
+        status = st.status("Hindi AI voice generate ho rahi hai…")
+
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                voice_bytes = []
+
+                for i, scene in enumerate(scenes, 1):
+                    path = os.path.join(td, f"voice_{i}.mp3")
+
+                    asyncio.run(
+                        generate_voice(scene, voice_id, path)
+                    )
+
+                    with open(path, "rb") as f:
+                        voice_bytes.append(f.read())
+
+            st.session_state["generated_voice"] = voice_bytes
+            st.session_state["generated_voice_script"] = script
+
+            status.update(
+                label="AI voice ready!",
+                state="complete"
+            )
+
+        except Exception as e:
+            status.update(
+                label="Voice generation failed",
+                state="error"
+            )
+            st.error(str(e))
+
+    if st.session_state.get("generated_voice_script") == script:
+        st.success("AI voice ready.")
+
+        for i, audio in enumerate(
+            st.session_state["generated_voice"], 1
+        ):
+            st.caption(f"Scene {i}")
+            st.audio(audio, format="audio/mp3")
 
 
-# ==========================================
-# 5. CREATE VIDEO
-# ==========================================
+# ----------------------------------
+# 5. CREATE FINAL VIDEO
+# ----------------------------------
 
 st.divider()
-st.header("5. Create Final Documentary")
+st.header("5. Create Documentary MP4")
 
 images_ready = (
-    uploaded_images is not None
+    bool(scenes)
+    and uploaded_images is not None
     and len(uploaded_images) == len(scenes)
-    and len(scenes) > 0
+)
+
+audio_ready = (
+    uploaded_audio is not None
+    if audio_mode == "Upload my own audio"
+    else (
+        st.session_state.get("generated_voice_script") == script
+        and len(st.session_state.get("generated_voice", [])) == len(scenes)
+    )
 )
 
 if not images_ready:
-    st.info("हर Scene के लिए एक Image Upload करें।")
+    st.info("Har scene ke liye ek image upload karein.")
 
-if not voice_ready:
-    st.info("पहले Hindi AI Voice Generate करें।")
+if not audio_ready:
+    st.info("Narration audio upload karein ya AI voice generate karein.")
 
 
 if st.button(
-    "CREATE FINAL MP4 VIDEO",
-    disabled=not (voice_ready and images_ready),
+    "🚀 CREATE FINAL MP4 VIDEO",
+    disabled=not (images_ready and audio_ready),
+    type="primary",
     use_container_width=True
 ):
 
-    progress = st.progress(0)
-    status = st.empty()
+    status = st.status("Video ban raha hai…", expanded=True)
 
-    video_clips = []
-    audio_clips = []
-    mask_clips = []
-
-    composite = None
-    final_video = None
-    final_audio = None
+    final_clip = None
+    audio_clip = None
 
     try:
-
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory() as td:
 
             image_paths = []
-            audio_paths = []
 
-            # Save images
-            status.write("Preparing images...")
+            for i, uploaded in enumerate(uploaded_images, 1):
+                path = os.path.join(td, f"image_{i}.png")
 
-            for i, uploaded in enumerate(
-                uploaded_images,
-                start=1
-            ):
-
-                image_path = os.path.join(
-                    temp_dir,
-                    f"image_{i}.png"
-                )
-
-                image = Image.open(
+                Image.open(
                     io.BytesIO(uploaded.getvalue())
-                ).convert("RGB")
+                ).convert("RGB").save(path)
 
-                image.save(image_path, format="PNG")
+                image_paths.append(path)
 
-                image_paths.append(image_path)
-
-                progress.progress(
-                    0.10 * i / len(uploaded_images)
-                )
-
-            # Save voice files
-            for i, audio_data in enumerate(
-                st.session_state["voice_segments"],
-                start=1
-            ):
+            # Audio file preparation
+            if audio_mode == "Upload my own audio":
 
                 audio_path = os.path.join(
-                    temp_dir,
-                    f"voice_{i}.mp3"
+                    td,
+                    "narration" + os.path.splitext(uploaded_audio.name)[1]
                 )
 
                 with open(audio_path, "wb") as f:
-                    f.write(audio_data)
+                    f.write(uploaded_audio.getbuffer())
 
-                audio_paths.append(audio_path)
+            else:
+                from moviepy import concatenate_audioclips
 
-            # Load audio clips
-            status.write("Reading voice durations...")
+                voice_paths = []
 
-            for audio_path in audio_paths:
+                for i, data in enumerate(
+                    st.session_state["generated_voice"], 1
+                ):
+                    path = os.path.join(td, f"voice_{i}.mp3")
 
-                audio_clip = AudioFileClip(audio_path)
-                audio_clips.append(audio_clip)
+                    with open(path, "wb") as f:
+                        f.write(data)
 
-            audio_durations = [
-                clip.duration
-                for clip in audio_clips
+                    voice_paths.append(path)
+
+                voice_clips = [
+                    AudioFileClip(path)
+                    for path in voice_paths
+                ]
+
+                joined = concatenate_audioclips(voice_clips)
+
+                audio_path = os.path.join(td, "narration.mp3")
+
+                joined.write_audiofile(
+                    audio_path,
+                    codec="libmp3lame",
+                    logger=None
+                )
+
+                joined.close()
+
+                for clip in voice_clips:
+                    clip.close()
+
+            # Automatic subtitle generation
+            status.write("Audio se subtitles ban rahe hain…")
+
+            whisper = WhisperModel(
+                "tiny",
+                device="cpu",
+                compute_type="int8"
+            )
+
+            lang = {
+                "Auto Detect": None,
+                "Hindi": "hi",
+                "English": "en"
+            }[subtitle_language]
+
+            iterator, meta = whisper.transcribe(
+                audio_path,
+                language=lang,
+                vad_filter=True,
+                beam_size=1
+            )
+
+            subtitles = [
+                {
+                    "start": float(s.start),
+                    "end": float(s.end),
+                    "text": s.text.strip()
+                }
+                for s in iterator
+                if s.text.strip()
             ]
 
-            total_duration = sum(audio_durations)
-
-            if total_duration <= 0:
-                raise ValueError("Invalid audio duration.")
-
-            # Calculate a safe fade for each scene boundary.
-            fade_durations = []
-
-            for i in range(len(audio_durations) - 1):
-
-                safe_fade = min(
-                    transition_duration,
-                    audio_durations[i] * 0.35,
-                    audio_durations[i + 1] * 0.35
+            if not subtitles:
+                raise RuntimeError(
+                    "Audio se subtitles nahi ban paaye. "
+                    "Clear narration upload karein."
                 )
 
-                fade_durations.append(
-                    max(0.05, safe_fade)
+            # Read audio and waveform data
+            status.write("Audio waveform prepare ho rahi hai…")
+
+            audio_clip = AudioFileClip(audio_path)
+            duration = float(audio_clip.duration)
+
+            samples = audio_clip.to_soundarray(fps=8000)
+
+            if samples.ndim == 2:
+                samples = samples.mean(axis=1)
+
+            samples = np.asarray(samples, dtype=np.float32)
+
+            # Prepare images
+            pics = [
+                cover_image(
+                    Image.open(path).convert("RGB"),
+                    (int(W * 0.64), H)
                 )
+                for path in image_paths
+            ]
 
-            # Build overlapping visual scenes
-            status.write(
-                "Creating stable zoom and smooth crossfades..."
-            )
+            # Render video
+            status.write("MP4 video render ho raha hai…")
 
-            current_start = 0.0
-
-            for i, image_path in enumerate(image_paths):
-
-                audio_duration = audio_durations[i]
-
-                fade_out_overlap = (
-                    fade_durations[i]
-                    if i < len(fade_durations)
-                    else 0.0
-                )
-
-                visual_duration = (
-                    audio_duration + fade_out_overlap
-                )
-
-                clip = create_zoom_clip(
-                    image_path,
-                    video_width,
-                    video_height,
-                    visual_duration
-                )
-
-                # Fade in every scene except the first.
-                if i > 0:
-
-                    fade_in = fade_durations[i - 1]
-
-                    def make_mask_frame(t, fade=fade_in):
-
-                        opacity = min(
-                            max(t / max(fade, 0.001), 0.0),
-                            1.0
-                        )
-
-                        return np.full(
-                            (video_height, video_width),
-                            opacity,
-                            dtype=np.float32
-                        )
-
-                    mask_clip = VideoClip(
-                        frame_function=make_mask_frame,
-                        is_mask=True,
-                        duration=visual_duration
-                    )
-
-                    mask_clips.append(mask_clip)
-                    clip = clip.with_mask(mask_clip)
-
-                clip = clip.with_start(current_start)
-
-                video_clips.append(clip)
-
-                current_start += audio_duration
-
-                progress.progress(
-                    0.10 + 0.45 * (i + 1) / len(image_paths)
-                )
-
-            # Composite visual clips
-            status.write("Combining all scenes...")
-
-            composite = CompositeVideoClip(
-                video_clips,
-                size=(video_width, video_height)
-            ).with_duration(total_duration)
-
-            # Join all voice segments
-            final_audio = concatenate_audioclips(
-                audio_clips
-            ).with_duration(total_duration)
-
-            final_video = composite.with_audio(
-                final_audio
-            )
+            final_clip = VideoClip(
+                frame_function=lambda t: build_visual_frame(
+                    t,
+                    pics,
+                    subtitles,
+                    samples,
+                    duration,
+                    W,
+                    H,
+                    subtitle_size
+                ),
+                duration=duration
+            ).with_audio(audio_clip)
 
             output_path = os.path.join(
-                temp_dir,
+                td,
                 "AMIR_AI_DOCUMENTARY.mp4"
             )
 
-            status.write(
-                "Rendering MP4. Please wait..."
-            )
-
-            final_video.write_videofile(
+            final_clip.write_videofile(
                 output_path,
-                fps=30,
+                fps=24,
                 codec="libx264",
                 audio_codec="aac",
                 preset="ultrafast",
@@ -797,66 +772,64 @@ if st.button(
             )
 
             with open(output_path, "rb") as f:
-                st.session_state["final_video"] = f.read()
+                st.session_state["final_mp4"] = f.read()
 
-            st.session_state["final_video_script"] = script
+            st.session_state["final_mp4_script"] = script
 
-            progress.progress(1.0)
-
-            status.success(
-                "Your documentary video is ready!"
+            status.update(
+                label="Documentary video ready!",
+                state="complete",
+                expanded=False
             )
 
-    except Exception as error:
+    except Exception as e:
 
-        st.error(
-            f"Video generation error: {error}"
+        status.update(
+            label="Video generation failed",
+            state="error"
+        )
+
+        st.error(f"Error: {e}")
+
+        st.warning(
+            "Streamlit Cloud par memory error aaye "
+            "to 720p aur chhoti duration se try karein."
         )
 
     finally:
 
-        if final_video is not None:
+        if final_clip is not None:
             try:
-                final_video.close()
+                final_clip.close()
             except Exception:
                 pass
 
-        if composite is not None:
+        if audio_clip is not None:
             try:
-                composite.close()
-            except Exception:
-                pass
-
-        for clip in video_clips + mask_clips + audio_clips:
-            try:
-                clip.close()
+                audio_clip.close()
             except Exception:
                 pass
 
 
-# ==========================================
-# 6. DOWNLOAD VIDEO
-# ==========================================
+# ----------------------------------
+# 6. DOWNLOAD MP4
+# ----------------------------------
 
 if (
-    st.session_state.get("final_video")
-    and st.session_state.get("final_video_script") == script
+    st.session_state.get("final_mp4")
+    and st.session_state.get("final_mp4_script") == script
 ):
 
     st.divider()
-    st.header("6. Download Your Documentary")
+    st.header("6. Download Final Documentary")
 
-    st.success("Your final MP4 video is ready!")
+    st.success("Your MP4 video is ready!")
 
     st.download_button(
-        label="DOWNLOAD FINAL DOCUMENTARY MP4",
-        data=st.session_state["final_video"],
+        "⬇️ DOWNLOAD FINAL DOCUMENTARY MP4",
+        data=st.session_state["final_mp4"],
         file_name="AMIR_AI_DOCUMENTARY.mp4",
         mime="video/mp4",
+        type="primary",
         use_container_width=True
-    )
-
-    st.caption(
-        "Android में डाउनलोड की गई वीडियो आमतौर पर Downloads folder में मिलेगी। "
-        "वहाँ से Gallery में ले जा सकते हैं।"
     )
