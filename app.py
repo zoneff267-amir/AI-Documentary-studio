@@ -806,4 +806,6 @@ if (
         data=st.session_state["final_mp4"],
         file_name="AMIR_AI_DOCUMENTARY.mp4",
         mime="video/mp4",
-            
+        type="primary",
+        use_container_width=True
+    )
