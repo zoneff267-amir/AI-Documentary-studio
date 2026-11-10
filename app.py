@@ -1,3 +1,4 @@
+
 import streamlit as st
 import os, re, io, tempfile, asyncio
 import numpy as np
@@ -380,6 +381,7 @@ else:
             st.session_state["generated_voice_script"] = script
             status.update(label="AI voice ready!", state="complete")
         except Exception as error:
+                    
             status.update(label="Voice generation failed", state="error")
             st.error(str(error))
 
@@ -495,8 +497,7 @@ if st.button(
             samples = np.asarray(samples, dtype=np.float32)
 
             # Prepare images according to selected video type.
-       ted video type. 
-                    if content_type == "Documentary":
+            if content_type == "Documentary":
                 left_width = int(VIDEO_W * 0.64)
                 images = [cover_crop(Image.open(path).convert("RGB"), (left_width, VIDEO_H)) for path in image_paths]
                 output_name = "AMIR_AI_DOCUMENTARY.mp4"
@@ -569,5 +570,4 @@ if (
         mime="video/mp4",
         type="primary",
         use_container_width=True
-    )
-       
+)
