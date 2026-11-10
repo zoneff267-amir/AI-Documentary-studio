@@ -411,7 +411,7 @@ if not audio_ready:
 
 if st.button(
     "🚀 CREATE FINAL MP4 VIDEO",
-    disabled=not (images_ready and audio_ready and bool(script.strip())),
+    disabled=not (images_ready and audio_ready and (content_type == "Book Summary" or bool(script.strip()))),
     type="primary",
     use_container_width=True
 ):
