@@ -2,8 +2,6 @@ streamlit
 edge-tts
 moviepy>=2.0.0
 Pillow
-pydub
-audioop-lts
 numpy
 faster-whisper
 av<18
